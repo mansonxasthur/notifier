@@ -1,0 +1,93 @@
+name: notifier
+
+x-app: &app
+  restart: "no"
+  environment: &app-env
+    DATABASE_URL: postgres://notifier:notifier@postgres:5432/notifier?sslmode=disable
+    AMQP_URL: amqp://notifier:notifier@rabbitmq:5672/
+    REDIS_URL: redis://redis:6379/0
+    CONFIG_PATH: /etc/notifier/config.yaml
+  volumes:
+    - ./config/config.yaml:/etc/notifier/config.yaml:ro
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    rabbitmq:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: notifier
+      POSTGRES_PASSWORD: notifier
+      POSTGRES_DB: notifier
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notifier -d notifier"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    # A fixed hostname keeps the node name, and so the data in the volume, across recreates.
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: notifier
+      RABBITMQ_DEFAULT_PASS: notifier
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: migrate/migrate:v4.18.3
+    # Keep the credentials in step with DATABASE_URL in x-app.
+    command: ["-path", "/migrations", "-database", "postgres://notifier:notifier@postgres:5432/notifier?sslmode=disable", "up"]
+    volumes:
+      - ./migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *app
+    build: {context: ., dockerfile: infra/Dockerfile, args: {SERVICE: api}}
+    ports: ["8080:8080"]
+
+  relay:
+    <<: *app
+    build: {context: ., dockerfile: infra/Dockerfile, args: {SERVICE: relay}}
+
+  sender:
+    <<: *app
+    build: {context: ., dockerfile: infra/Dockerfile, args: {SERVICE: sender}}
+
+  simprovider:
+    build: {context: ., dockerfile: infra/Dockerfile, args: {SERVICE: simprovider}}
+    environment:
+      CONFIG_PATH: /etc/notifier/config.yaml
+      HTTP_ADDR: ":8081"
+    volumes:
+      - ./config/config.yaml:/etc/notifier/config.yaml:ro
+    ports: ["8081:8081"]
+
+volumes:
+  postgres-data:
+  rabbitmq-data:

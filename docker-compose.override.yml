@@ -1,0 +1,39 @@
+# Dev stack, picked up automatically by `docker compose` (and `make up`):
+# source is bind-mounted and air rebuilds each service on change.
+x-dev: &dev
+  build: {context: ., dockerfile: infra/dev.Dockerfile}
+  volumes:
+    - .:/src
+    - go-cache:/go/pkg/mod
+    - go-build:/root/.cache/go-build
+    - ./config/config.yaml:/etc/notifier/config.yaml:ro
+  # air keeps its scratch files in /tmp inside the container, not in the shared checkout.
+  command: >
+    sh -c 'air --tmp_dir /tmp/air
+    --build.cmd "go build -o /tmp/air/app ./cmd/$$SERVICE"
+    --build.bin /tmp/air/app
+    --build.exclude_dir "docs,_plans,migrations,infra,.git,tmp"'
+
+services:
+  api:
+    <<: *dev
+    environment: {SERVICE: api}
+  relay:
+    <<: *dev
+    environment: {SERVICE: relay}
+  sender:
+    <<: *dev
+    environment: {SERVICE: sender}
+  simprovider:
+    <<: *dev
+    environment: {SERVICE: simprovider}
+  postgres:
+    ports: ["5432:5432"]
+  rabbitmq:
+    ports: ["5672:5672", "15672:15672"]
+  redis:
+    ports: ["6379:6379"]
+
+volumes:
+  go-cache:
+  go-build:
