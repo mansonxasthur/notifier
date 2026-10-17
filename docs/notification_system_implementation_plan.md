@@ -16,12 +16,12 @@ Build in thin vertical slices, durability first, so each phase leaves a system t
 
 Goal: an empty but wired project that builds, starts three entry points, and talks to its dependencies.
 
-- [ ] Repository layout with `domain`, `ports`, `adapters`, and `cmd` for `api`, `relay`, and `sender`
-- [ ] docker-compose with PostgreSQL, RabbitMQ, one Redis (breaker state and rate limits), and the simulated provider service
-- [ ] Migrations for notifications, deliveries, outbox, and inbox tables (every column NOT NULL except next\_attempt\_at and failure\_reason in the outbox, and next\_attempt\_at, failure\_class, and failure\_reason in the inbox; contact and content as jsonb; outbox keyed by delivery\_id with state, retries, last\_try, next\_attempt\_at, and failure\_reason; inbox keyed by delivery\_id with state, provider, retries, claim\_count, last\_try, next\_attempt\_at, failure\_class, and failure\_reason), including the unique constraint on `(notification_id, recipient_id, channel)` and partial indexes: outbox `next_attempt_at` for the relay (an empty value counts as due now), `last_try` on both tables for the janitor, and inbox `next_attempt_at` for the sender scan
-- [ ] Configuration loading: per-notification-type expiry values, provider order, per-provider call timeout, whether it supports a status lookup, maximum retries, and backoff with jitter, the batch limit (10,000 recipients), poll intervals for the relay and the sender scan, and janitor thresholds
-- [ ] `slog` setup with stdout as the default handler
-- [ ] CI that runs lint and unit tests
+- [x] Repository layout with `domain`, `ports`, `adapters`, and `cmd` for `api`, `relay`, and `sender`
+- [x] docker-compose with PostgreSQL, RabbitMQ, one Redis (breaker state and rate limits), and the simulated provider service
+- [x] Migrations for notifications, deliveries, outbox, and inbox tables (every column NOT NULL except next\_attempt\_at and failure\_reason in the outbox, and next\_attempt\_at, failure\_class, and failure\_reason in the inbox; contact and content as jsonb; outbox keyed by delivery\_id with state, retries, last\_try, next\_attempt\_at, and failure\_reason; inbox keyed by delivery\_id with state, provider, retries, claim\_count, last\_try, next\_attempt\_at, failure\_class, and failure\_reason), including the unique constraint on `(notification_id, recipient_id, channel)` and partial indexes: outbox `next_attempt_at` for the relay (an empty value counts as due now), `last_try` on both tables for the janitor, and inbox `next_attempt_at` for the sender scan
+- [x] Configuration loading: per-notification-type expiry values, provider order, per-provider call timeout, whether it supports a status lookup, maximum retries, and backoff with jitter, the batch limit (10,000 recipients), poll intervals for the relay and the sender scan, and janitor thresholds
+- [x] `slog` setup with stdout as the default handler
+- [x] CI that runs lint and unit tests
 
 Done when all three entry points start, connect, and exit cleanly. Graceful shutdown is mandatory and is built with each entry point.
 
