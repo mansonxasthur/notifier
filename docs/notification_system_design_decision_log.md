@@ -214,6 +214,19 @@ The 5 second target is a claim about first attempts, not about every delivery. R
 
 **Queue wait time**, from the moment a delivery is queued to the moment the sender starts on it, is measured next to end-to-end latency in the load test. It shows directly whether the drain rate keeps up with the arrival rate. A first attempt that fails does not count as within 5 seconds. It counts as a retry or a fallback, which is outside the claim.
 
+## Foundations (Phase 1)
+
+Choices made while scaffolding the project. They fill gaps in the sections above and change none of them.
+
+- **Libraries.** `pgx/v5` (`pgxpool`) for Postgres, `rabbitmq/amqp091-go`, `redis/go-redis/v9`, `yaml.v3` for configuration, `golang-migrate` for migrations (the CLI in compose, the library in tests), and `testcontainers-go` for integration tests.
+- **Column types.** `bigint generated always as identity` for ids, `text`, `jsonb`, and `timestamptz`. There are no CHECK constraints: the inbox's only constraint is its key, and state values are enforced by typed enums in `internal/domain`.
+- **State names.** The log leaves some open. Outbox: `NEW`, `PROCESSING`, `PUBLISHED`, `DEAD`. Inbox: `PROCESSING`, `WAITING_RETRY`, `DONE`, `DEAD`. Deliveries: `PENDING`, `ACCEPTED`, `DELIVERED`, `FAILED`, `UNRESOLVED`.
+- **Configuration.** A YAML file (unknown keys are an error) with environment overrides for connection strings and the listen address. Connection strings never live in the file.
+- **Providers.** Each channel lists its providers in order. Exactly one has `primary: true` and the others are fallbacks, tried in list order. `max_retries` defaults to 1 for every provider, and stays configurable.
+- **Simulation flag.** A global `simulation` setting routes every provider call to the simulated provider service when true, and to the providers' real URLs when false. Phase 1 loads and validates it, and Phase 4 acts on it.
+- **Verification percentile.** Simulation and load-test checks gate on p95 from request to `ACCEPTED`. The p99 figure against the 5 second target is still recorded and reported, and the target above is unchanged.
+- **Operations.** Migrations run as a one-shot compose service before the entry points start. Logs are JSON on stdout by default, with text available through `LOG_FORMAT=text`.
+
 ## Observability, testing, structure and documentation
 
 **Structure.** Hexagonal architecture in Go: domain and ports at the center, with Postgres, RabbitMQ, Redis, HTTP and the simulated providers as adapters. Ports give flexibility at wiring time. Choosing a provider at runtime needs a registry plus the breaker-driven routing described above. Layers stay light to avoid over-abstraction.
