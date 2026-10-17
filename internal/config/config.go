@@ -121,17 +121,23 @@ func parse(r io.Reader, getenv func(string) string) (*Config, error) {
 	return &c, nil
 }
 
+// Dependency names a connection string an entry point needs.
+type Dependency string
+
+const (
+	Postgres Dependency = "DATABASE_URL"
+	RabbitMQ Dependency = "AMQP_URL"
+	Redis    Dependency = "REDIS_URL"
+)
+
 // Require fails when a connection string the calling entry point needs is unset.
-func (c *Config) Require(database, amqp, redis bool) error {
+func (c *Config) Require(deps ...Dependency) error {
+	urls := map[Dependency]string{Postgres: c.DatabaseURL, RabbitMQ: c.AMQPURL, Redis: c.RedisURL}
 	var errs []error
-	if database && c.DatabaseURL == "" {
-		errs = append(errs, errors.New("DATABASE_URL is required"))
-	}
-	if amqp && c.AMQPURL == "" {
-		errs = append(errs, errors.New("AMQP_URL is required"))
-	}
-	if redis && c.RedisURL == "" {
-		errs = append(errs, errors.New("REDIS_URL is required"))
+	for _, d := range deps {
+		if urls[d] == "" {
+			errs = append(errs, fmt.Errorf("%s is required", d))
+		}
 	}
 	return errors.Join(errs...)
 }

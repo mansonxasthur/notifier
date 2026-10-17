@@ -64,11 +64,11 @@ func TestEnvOverrides(t *testing.T) {
 
 func TestRequire(t *testing.T) {
 	c := loadShipped(t)
-	if err := c.Require(true, true, true); err == nil {
+	if err := c.Require(Postgres, RabbitMQ, Redis); err == nil {
 		t.Fatal("want error for unset connection strings")
 	}
 	c.DatabaseURL = "postgres://db"
-	if err := c.Require(true, false, false); err != nil {
+	if err := c.Require(Postgres); err != nil {
 		t.Fatalf("database only: %v", err)
 	}
 }
