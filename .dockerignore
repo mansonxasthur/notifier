@@ -1,0 +1,10 @@
+.git
+.env
+.github
+.idea
+.vscode
+_plans
+docs
+bin
+tmp
+*.md

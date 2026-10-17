@@ -1,0 +1,88 @@
+# Defaults for every entry point. Connection strings come from the environment
+# (DATABASE_URL, AMQP_URL, REDIS_URL); HTTP_ADDR overrides http.addr.
+
+shutdown_timeout: 20s
+
+http:
+  addr: ":8080"
+
+# Largest accepted request, in recipients.
+batch_limit: 10000
+
+# Default expiry for a delivery when the request carries no expires_at.
+notification_types:
+  password_reset: {expiry: 15m}
+  match_alert: {expiry: 2h}
+  marketing: {expiry: 24h}
+
+# true: every provider call goes to the simulated provider at simulation_url.
+# false: providers are called at their own url.
+simulation: true
+simulation_url: http://simprovider:8081
+
+# Providers are tried in list order. Exactly one per channel is primary; the rest are fallbacks.
+channels:
+  email:
+    providers:
+      - name: email-a
+        primary: true
+        url: https://email-a.example.com
+        timeout: 1s
+        status_lookup: true
+        max_retries: 1
+        backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+      - name: email-b
+        primary: false
+        url: https://email-b.example.com
+        timeout: 1s
+        status_lookup: false
+        max_retries: 1
+        backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+  sms:
+    providers:
+      - name: sms-a
+        primary: true
+        url: https://sms-a.example.com
+        timeout: 1s
+        status_lookup: true
+        max_retries: 1
+        backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+      - name: sms-b
+        primary: false
+        url: https://sms-b.example.com
+        timeout: 1s
+        status_lookup: false
+        max_retries: 1
+        backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+  whatsapp:
+    providers:
+      - name: whatsapp-a
+        primary: true
+        url: https://whatsapp-a.example.com
+        timeout: 1s
+        status_lookup: true
+        max_retries: 1
+        backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+      - name: whatsapp-b
+        primary: false
+        url: https://whatsapp-b.example.com
+        timeout: 1s
+        status_lookup: false
+        max_retries: 1
+        backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+
+relay:
+  poll_interval: 100ms
+  batch_size: 500
+  max_attempts: 10
+  backoff: {initial: 1s, max: 1m, multiplier: 2.0, jitter: 0.2}
+  janitor:
+    interval: 5s
+    outbox_stuck_after: 30s
+    # Added to a provider's timeout to get the stuck threshold for its inbox rows.
+    inbox_stuck_margin: 2s
+
+sender:
+  # How often the sender scans for retries that have become due.
+  poll_interval: 200ms
+  max_claims: 20

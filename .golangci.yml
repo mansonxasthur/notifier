@@ -1,0 +1,13 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - gosec
+    - noctx
+    - sloglint
+
+formatters:
+  enable:
+    - gofmt
