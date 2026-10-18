@@ -77,6 +77,7 @@ Response to a partly accepted batch:
 | Missing or wrong API key | 401 |
 | Malformed body | 400 |
 | More recipients than the batch limit, or a body over the size cap | 413 |
+| Intake over the global limit | 429 with `Retry-After` and the error code `RATE_LIMITED`, nothing written, safe to retry with the same key |
 | Replay of a key where every row already exists | 202, all rows counted as duplicates |
 | Every recipient rejected | 422 |
 | Database or infrastructure failure, nothing accepted | 5xx, safe to retry with the same key |
@@ -240,6 +241,17 @@ The limiter protects the system from overload, not from legitimate bursts. Rate 
 - **Burst handling.** Reject with 429 and `Retry-After` when a limit is exceeded. Requests that were already accepted are held in the queue and the outbox.
 - **Shared counters.** Counters live in Redis and are shared by every Dispatcher instance, because the database behind them is the shared bottleneck whatever the instance count. If Redis is unreachable, the limiter falls back to a local in-memory limiter on each instance, so limiting becomes approximate instead of absent.
 - **Provider limiter.** A separate per-provider token bucket in the sender protects providers from floods.
+
+Details settled for Phase 6:
+
+- **One algorithm: the token bucket.** The global limit and the per-provider limit are both token buckets, so one implementation (`internal/domain`) serves the Redis limiter's local fallback and the sender. A bucket holds up to `burst` tokens and refills at `rate` tokens per second. The global bucket's rate is in deliveries per second, sized from the 500K per second peak. A fixed-window counter was considered: it needs one Redis call and no script, but it admits up to twice the limit across a window boundary and would need a second algorithm for the other two limiters.
+- **Charged by delivery count, all or nothing.** The Dispatcher charges a request recipients times channels, after validation and in-payload de-duplication and before any database write. If the bucket holds fewer tokens than that, the whole request is refused with 429 and nothing is taken, so a rejected request consumes no budget and a request is never partly accepted. The charge is made in the handler, not in middleware, because only the handler knows the delivery count. Duplicates of rows already stored are still charged, since the count is known before the insert.
+- **The burst must fit the largest request.** A request larger than the bucket's `burst` could never succeed and would get a permanent 429. Configuration loading therefore rejects a `burst` below the batch limit times the number of channels.
+- **Redis holds the shared bucket.** The bucket is one hash (`tokens`, `ts`) updated by a single Lua script that refills and takes in one step, using the Redis server clock so instances with skewed clocks agree. The hash expires after the bucket would have refilled, so an idle system leaves no state.
+- **Fallback is per instance and approximate.** When a Redis call fails, that request is charged against a local bucket with the same rate and burst, and the first failure of an outage is logged once, not per request. The cost is that with N instances the effective limit rises to up to N times the rate until Redis recovers; limiting stays present, as the log requires. The limiter returns to Redis as soon as a call succeeds.
+- **`Retry-After`** is the bucket's own estimate of when the request would fit, in whole seconds, rounded up, never below 1.
+- **A denied provider token defers, it does not retry.** The sender takes the provider's token before the breaker check, so a denial cannot leak a half-open probe slot. A denial is not a provider failure: the inbox row goes back to `WAITING_RETRY` on the same provider with `next_attempt_at` set to when the bucket will have a token, plus a small jitter, and neither `retries` nor `claim_count` changes. A throttled delivery therefore cannot exhaust its retries or reach the claim cap by waiting, and the existing sender scan picks it up. The deadline is still checked before every send, so a delivery that waits past its deadline ends `FAILED` with `EXPIRED`. Blocking a worker until a token frees up was considered and not chosen, because it holds a consumer slot while the provider is saturated.
+- **Rate-limit semantics.** Rejecting above a limit does drop part of the burst, which the system exists to absorb. It is accepted deliberately: the limit is set at what the shared database can take, so work above it cannot be held anywhere safe, and the 429 with `Retry-After` hands the wait back to the producer. Anything already accepted is held in the queue and outbox and drained at the providers' pace.
 
 ## Latency target
 
