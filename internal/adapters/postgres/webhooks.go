@@ -24,8 +24,10 @@ func NewWebhookStore(db *Pool) *WebhookStore { return &WebhookStore{db: db} }
 // foreignKeyViolation is the Postgres error code for a missing referenced row.
 const foreignKeyViolation = "23503"
 
-// The guard: the delivery moves only while its state is one of the allowed sources, so
-// terminal states stay terminal and the first terminal webhook wins.
+// The guard: the delivery moves only while its state is one of the sources the domain
+// rule allows (domain.MovesInto), so DELIVERED and FAILED stay final, the first of them
+// wins, and a late webhook can still settle UNRESOLVED. The rule lives in the domain; the
+// database only makes the check and the write one atomic statement.
 const applyWebhook = `
 UPDATE deliveries SET state = $2, failure_reason = $3, updated_at = now()
 WHERE id = $1 AND state = ANY($4::text[])`

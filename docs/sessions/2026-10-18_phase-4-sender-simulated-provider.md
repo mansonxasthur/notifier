@@ -39,7 +39,11 @@ Review findings fixed, by theme:
 - **Webhooks:** a provider's webhook cannot settle another channel's deliveries; the pre-authentication body cap is small; a 4xx from the API is not retried by the simulator.
 - **Simulator ordering:** a slow or timed-out call sends its webhook after the response it delays.
 
-Review findings left, with reasons: the HMAC covers only the body, so a captured webhook can be replayed (a timestamped scheme would get its own authenticator); the simulator's registry and webhook goroutines are unbounded, which suits a simulator; `UNRESOLVED` stays terminal, as the decision log says, so a late webhook cannot settle it (the engineer has not asked to change this); expiry, the retry scan and the 429 `Retry-After` belong to Phase 5.
+Review findings left, with reasons: the HMAC covers only the body, so a captured webhook can be replayed (a timestamped scheme would get its own authenticator); the simulator's registry and webhook goroutines are unbounded, which suits a simulator; expiry, the retry scan and the 429 `Retry-After` belong to Phase 5.
+
+## After the build
+
+The engineer asked whether a late webhook should be able to settle an `UNRESOLVED` delivery and decided yes: `UNRESOLVED` can be replaced by `DELIVERED` or `FAILED`, never the other way, with the rule in the application and no database constraint. The decision log was changed first, then the move table in `internal/domain`, which the webhook update's guard is built from, with tests in the domain and against Postgres.
 
 ## Verification
 

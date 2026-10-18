@@ -12,6 +12,9 @@ func TestDeliveryMoves(t *testing.T) {
 		{DeliveryAccepted, DeliveryDelivered}:  true,
 		{DeliveryAccepted, DeliveryFailed}:     true, // a late failure webhook
 		{DeliveryAccepted, DeliveryUnresolved}: true,
+		// A late webhook replaces "not learned yet" with the provider's answer.
+		{DeliveryUnresolved, DeliveryDelivered}: true,
+		{DeliveryUnresolved, DeliveryFailed}:    true,
 	}
 	for _, from := range all {
 		for _, to := range all {
@@ -22,13 +25,16 @@ func TestDeliveryMoves(t *testing.T) {
 	}
 }
 
-func TestTerminalStatesStayTerminal(t *testing.T) {
-	for _, s := range []DeliveryState{DeliveryDelivered, DeliveryFailed, DeliveryUnresolved} {
+func TestDeliveredAndFailedStayFinal(t *testing.T) {
+	for _, s := range []DeliveryState{DeliveryDelivered, DeliveryFailed} {
 		if !s.Terminal() {
 			t.Errorf("%s should be terminal", s)
 		}
+		if s.CanMoveTo(DeliveryUnresolved) {
+			t.Errorf("%s must never go back to UNRESOLVED", s)
+		}
 	}
-	for _, s := range []DeliveryState{DeliveryPending, DeliveryAccepted} {
+	for _, s := range []DeliveryState{DeliveryPending, DeliveryAccepted, DeliveryUnresolved} {
 		if s.Terminal() {
 			t.Errorf("%s should not be terminal", s)
 		}
@@ -41,8 +47,9 @@ func TestMovesInto(t *testing.T) {
 		want []DeliveryState
 	}{
 		{DeliveryAccepted, []DeliveryState{DeliveryPending}},
-		{DeliveryDelivered, []DeliveryState{DeliveryPending, DeliveryAccepted}},
-		{DeliveryFailed, []DeliveryState{DeliveryPending, DeliveryAccepted}},
+		{DeliveryDelivered, []DeliveryState{DeliveryPending, DeliveryAccepted, DeliveryUnresolved}},
+		{DeliveryFailed, []DeliveryState{DeliveryPending, DeliveryAccepted, DeliveryUnresolved}},
+		{DeliveryUnresolved, []DeliveryState{DeliveryPending, DeliveryAccepted}},
 		{DeliveryPending, nil},
 	}
 	for _, tt := range tests {

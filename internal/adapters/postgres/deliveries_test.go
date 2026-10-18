@@ -174,6 +174,32 @@ func TestInboxPark(t *testing.T) {
 	}
 }
 
+// The sender's own updates only move a delivery out of PENDING, so an UNRESOLVED delivery
+// is left as it is.
+func TestInboxUpdatesLeaveAnUnresolvedDeliveryAlone(t *testing.T) {
+	ctx := context.Background()
+	for name, finish := range map[string]func(*postgres.InboxStore, int64, int) (bool, error){
+		"Complete": func(s *postgres.InboxStore, id int64, n int) (bool, error) { return s.Complete(ctx, id, n) },
+		"Fail": func(s *postgres.InboxStore, id int64, n int) (bool, error) {
+			return s.Fail(ctx, id, n, domain.FailureMessage, domain.ReasonProviderRejected)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db := seed(t, 1)
+			store, id, n := claimed(t, db)
+			if _, err := db.Pool().Exec(ctx, `UPDATE deliveries SET state = 'UNRESOLVED'`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := finish(store, id, n); err != nil {
+				t.Fatal(err)
+			}
+			if got := state(t, db, deliveryState, id); got != "UNRESOLVED" {
+				t.Errorf("delivery = %s, want UNRESOLVED left alone", got)
+			}
+		})
+	}
+}
+
 func TestWebhookApply(t *testing.T) {
 	ctx := context.Background()
 	event := func(id int64, outcome domain.DeliveryState, reason domain.FailureReason) ports.WebhookEvent {
@@ -243,6 +269,46 @@ func TestWebhookApply(t *testing.T) {
 		got := applied(t, db, id)
 		if len(got) != 3 || !got[0] || got[1] || got[2] {
 			t.Errorf("applied flags = %v, want [true false false]: every event is kept", got)
+		}
+	})
+
+	t.Run("a late webhook settles UNRESOLVED, and only that way round", func(t *testing.T) {
+		for _, tt := range []struct {
+			outcome domain.DeliveryState
+			reason  domain.FailureReason
+			want    string
+		}{
+			{domain.DeliveryDelivered, "", "DELIVERED"},
+			{domain.DeliveryFailed, domain.ReasonBounced, "FAILED"},
+		} {
+			db := seed(t, 1)
+			store, id := postgres.NewWebhookStore(db), deliveryID(t, db)
+			if _, err := db.Pool().Exec(ctx, `UPDATE deliveries SET state = 'UNRESOLVED'`); err != nil {
+				t.Fatal(err)
+			}
+
+			ok, err := store.Apply(ctx, event(id, tt.outcome, tt.reason))
+			if err != nil || !ok {
+				t.Fatalf("%s: Apply = %v, %v, want it to settle UNRESOLVED", tt.want, ok, err)
+			}
+			if got := state(t, db, deliveryState, id); got != tt.want {
+				t.Errorf("delivery = %s, want %s", got, tt.want)
+			}
+			if got := state(t, db, deliveryReason, id); got != string(tt.reason) {
+				t.Errorf("failure_reason = %q, want %q", got, tt.reason)
+			}
+
+			// What settled it is final: the opposite report is stored and ignored.
+			opposite := domain.DeliveryDelivered
+			if tt.outcome == domain.DeliveryDelivered {
+				opposite = domain.DeliveryFailed
+			}
+			if ok, err := store.Apply(ctx, event(id, opposite, domain.ReasonBounced)); err != nil || ok {
+				t.Errorf("after %s: opposite Apply = %v, %v, want ignored", tt.want, ok, err)
+			}
+			if got := state(t, db, deliveryState, id); got != tt.want {
+				t.Errorf("delivery = %s after a contradiction, want %s", got, tt.want)
+			}
 		}
 	})
 

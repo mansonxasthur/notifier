@@ -11,12 +11,22 @@ const (
 	DeliveryUnresolved DeliveryState = "UNRESOLVED"
 )
 
-// deliveryMoves lists the forward moves a delivery may make. Terminal states have none.
-// A timeout on the last provider ends a PENDING delivery UNRESOLVED without ever
-// reaching ACCEPTED.
+// deliveryMoves lists the moves a delivery may make; this is the only place the rule lives.
+// The sender's own updates are deliberately narrower: they move a delivery out of PENDING
+// only, because a delivery that a webhook already advanced is not theirs to change.
+// A timeout on the last provider ends a PENDING delivery UNRESOLVED without ever reaching
+// ACCEPTED. UNRESOLVED means "not learned yet", so a later webhook may replace it with
+// DELIVERED or FAILED, but nothing moves a delivery to UNRESOLVED from those two, which
+// have no moves.
 var deliveryMoves = map[DeliveryState][]DeliveryState{
-	DeliveryPending:  {DeliveryAccepted, DeliveryDelivered, DeliveryFailed, DeliveryUnresolved},
-	DeliveryAccepted: {DeliveryDelivered, DeliveryFailed, DeliveryUnresolved},
+	DeliveryPending:    {DeliveryAccepted, DeliveryDelivered, DeliveryFailed, DeliveryUnresolved},
+	DeliveryAccepted:   {DeliveryDelivered, DeliveryFailed, DeliveryUnresolved},
+	DeliveryUnresolved: {DeliveryDelivered, DeliveryFailed},
+}
+
+// allDeliveryStates lists every state in a fixed order, for building guards from the table.
+var allDeliveryStates = []DeliveryState{
+	DeliveryPending, DeliveryAccepted, DeliveryDelivered, DeliveryFailed, DeliveryUnresolved,
 }
 
 // CanMoveTo reports whether a delivery in state s may move to state to.
@@ -29,14 +39,15 @@ func (s DeliveryState) CanMoveTo(to DeliveryState) bool {
 	return false
 }
 
-// Terminal reports whether no further move is possible from s.
+// Terminal reports whether no further move is possible from s. UNRESOLVED is not terminal:
+// a late webhook can still settle it.
 func (s DeliveryState) Terminal() bool { return len(deliveryMoves[s]) == 0 }
 
 // MovesInto returns the states a delivery may move to to from, in a fixed order. It is
 // the guard of a conditional update: the row changes only while its state is one of these.
 func MovesInto(to DeliveryState) []DeliveryState {
 	var from []DeliveryState
-	for _, s := range []DeliveryState{DeliveryPending, DeliveryAccepted} {
+	for _, s := range allDeliveryStates {
 		if s.CanMoveTo(to) {
 			from = append(from, s)
 		}
