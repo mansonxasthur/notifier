@@ -10,8 +10,8 @@ import (
 	"github.com/mansonxasthur/notifier/internal/adapters/redis"
 	"github.com/mansonxasthur/notifier/internal/app"
 	"github.com/mansonxasthur/notifier/internal/config"
-	"github.com/mansonxasthur/notifier/internal/domain"
 	"github.com/mansonxasthur/notifier/internal/httpserver"
+	"github.com/mansonxasthur/notifier/internal/httpserver/requests"
 	"github.com/mansonxasthur/notifier/internal/lifecycle"
 )
 
@@ -40,10 +40,10 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 }
 
 // policy turns the configured limits into the rules the domain validates against.
-func policy(cfg *config.Config) domain.Policy {
+func policy(cfg *config.Config) requests.Policy {
 	expiry := make(map[string]time.Duration, len(cfg.NotificationTypes))
 	for name, t := range cfg.NotificationTypes {
 		expiry[name] = t.Expiry
 	}
-	return domain.Policy{BatchLimit: cfg.BatchLimit, Expiry: expiry}
+	return requests.Policy{BatchLimit: cfg.BatchLimit, Expiry: expiry}
 }

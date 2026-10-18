@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mansonxasthur/notifier/internal/domain"
+	"github.com/mansonxasthur/notifier/internal/httpserver/requests"
 	"github.com/mansonxasthur/notifier/internal/ports"
 )
 
@@ -43,7 +44,7 @@ func newHandler(store ports.NotificationStore, maxBody int64) http.Handler {
 		Log:    slog.New(slog.DiscardHandler),
 		Store:  store,
 		APIKey: testAPIKey,
-		Policy: domain.Policy{
+		Policy: requests.Policy{
 			BatchLimit: 3,
 			Expiry:     map[string]time.Duration{"match_alert": 2 * time.Hour},
 		},
@@ -178,7 +179,7 @@ func TestCreateAllRejected(t *testing.T) {
 		t.Fatalf("status = %d, want 422", rec.Code)
 	}
 	got := decode[createResponse](t, rec)
-	if got.Accepted != 0 || len(got.Rejected) != 1 || got.Rejected[0].Reason != domain.ReasonInvalidContact {
+	if got.Accepted != 0 || len(got.Rejected) != 1 || got.Rejected[0].Reason != requests.ReasonInvalidContact {
 		t.Errorf("body = %+v", got)
 	}
 	if store.calls != 0 {

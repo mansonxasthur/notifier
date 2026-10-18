@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mansonxasthur/notifier/internal/domain"
+	"github.com/mansonxasthur/notifier/internal/httpserver/requests"
 	"github.com/mansonxasthur/notifier/internal/ports"
 )
 
@@ -31,11 +31,11 @@ var requestErrors = []struct {
 	status int
 	code   string
 }{
-	{domain.ErrTooManyRecipients, http.StatusRequestEntityTooLarge, codeTooManyRecipients},
-	{domain.ErrNoRecipients, http.StatusUnprocessableEntity, codeNoRecipients},
-	{domain.ErrUnknownType, http.StatusUnprocessableEntity, codeUnknownType},
-	{domain.ErrDeadlinePast, http.StatusUnprocessableEntity, codeExpiredDeadline},
-	{domain.ErrInvalidIdempotencyKey, http.StatusUnprocessableEntity, codeInvalidIdempotency},
+	{requests.ErrTooManyRecipients, http.StatusRequestEntityTooLarge, codeTooManyRecipients},
+	{requests.ErrNoRecipients, http.StatusUnprocessableEntity, codeNoRecipients},
+	{requests.ErrUnknownType, http.StatusUnprocessableEntity, codeUnknownType},
+	{requests.ErrDeadlinePast, http.StatusUnprocessableEntity, codeExpiredDeadline},
+	{requests.ErrInvalidIdempotencyKey, http.StatusUnprocessableEntity, codeInvalidIdempotency},
 }
 
 // NotificationsOptions configures the notification endpoint.
@@ -44,7 +44,7 @@ type NotificationsOptions struct {
 	Store ports.NotificationStore
 	// APIKey is the key producers must send in X-API-KEY.
 	APIKey string
-	Policy domain.Policy
+	Policy requests.Policy
 	// MaxBodyBytes caps the request body.
 	MaxBodyBytes int64
 	// Now is the clock; it defaults to time.Now.
@@ -65,9 +65,9 @@ func RegisterNotifications(mux *http.ServeMux, o NotificationsOptions) error {
 }
 
 type createResponse struct {
-	Accepted   int                `json:"accepted"`
-	Duplicates int                `json:"duplicates"`
-	Rejected   []domain.Rejection `json:"rejected"`
+	Accepted   int                  `json:"accepted"`
+	Duplicates int                  `json:"duplicates"`
+	Rejected   []requests.Rejection `json:"rejected"`
 }
 
 func (o NotificationsOptions) create(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +91,7 @@ func (o NotificationsOptions) create(w http.ResponseWriter, r *http.Request) {
 
 	resp := createResponse{Duplicates: v.Duplicates, Rejected: v.Rejected}
 	if resp.Rejected == nil {
-		resp.Rejected = []domain.Rejection{}
+		resp.Rejected = []requests.Rejection{}
 	}
 	if len(v.Notification.Deliveries) == 0 {
 		writeJSON(w, http.StatusUnprocessableEntity, resp)
@@ -116,11 +116,11 @@ func (o NotificationsOptions) create(w http.ResponseWriter, r *http.Request) {
 // decodeRequest reads one JSON request from the body. It writes the error response itself
 // and returns false when the body is too large, malformed, has unknown fields, or has
 // anything after the first JSON value.
-func decodeRequest(w http.ResponseWriter, r *http.Request, maxBytes int64) (domain.Request, bool) {
+func decodeRequest(w http.ResponseWriter, r *http.Request, maxBytes int64) (requests.CreateNotificationRequest, bool) {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBytes))
 	dec.DisallowUnknownFields()
 
-	var req domain.Request
+	var req requests.CreateNotificationRequest
 	err := dec.Decode(&req)
 	if err == nil {
 		_, extra := dec.Token()
@@ -139,7 +139,7 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, maxBytes int64) (doma
 		} else {
 			writeError(w, http.StatusBadRequest, codeMalformedBody)
 		}
-		return domain.Request{}, false
+		return requests.CreateNotificationRequest{}, false
 	}
 	return req, true
 }

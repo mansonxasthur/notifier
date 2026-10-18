@@ -52,6 +52,23 @@ WITH inserted AS (
 INSERT INTO outbox (delivery_id, state, retries, last_try)
 SELECT id, $7::text, 0, now() FROM inserted`
 
+// storedContent is the JSON shape of a channel's content in notifications.content.
+type storedContent struct {
+	Text       string            `json:"text,omitempty"`
+	Subject    string            `json:"subject,omitempty"`
+	Body       string            `json:"body,omitempty"`
+	TemplateID string            `json:"template_id,omitempty"`
+	Variables  map[string]string `json:"variables,omitempty"`
+}
+
+func storedContents(content map[domain.Channel]domain.Content) map[domain.Channel]storedContent {
+	out := make(map[domain.Channel]storedContent, len(content))
+	for ch, c := range content {
+		out[ch] = storedContent(c)
+	}
+	return out
+}
+
 // Create implements ports.NotificationStore.
 func (s *NotificationStore) Create(ctx context.Context, n *domain.Notification) (ports.CreateResult, error) {
 	if s.chunkSize < 1 {
@@ -60,7 +77,7 @@ func (s *NotificationStore) Create(ctx context.Context, n *domain.Notification) 
 	if len(n.Deliveries) == 0 {
 		return ports.CreateResult{}, errors.New("create notification: no deliveries")
 	}
-	content, err := json.Marshal(n.Content)
+	content, err := json.Marshal(storedContents(n.Content))
 	if err != nil {
 		return ports.CreateResult{}, fmt.Errorf("encode content: %w", err)
 	}

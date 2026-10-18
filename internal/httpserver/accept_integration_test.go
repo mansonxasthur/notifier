@@ -13,14 +13,14 @@ import (
 
 	"github.com/mansonxasthur/notifier/internal/adapters/postgres"
 	"github.com/mansonxasthur/notifier/internal/adapters/postgres/pgtest"
-	"github.com/mansonxasthur/notifier/internal/domain"
 	"github.com/mansonxasthur/notifier/internal/httpserver"
+	"github.com/mansonxasthur/notifier/internal/httpserver/requests"
 )
 
 type response struct {
-	Accepted   int                `json:"accepted"`
-	Duplicates int                `json:"duplicates"`
-	Rejected   []domain.Rejection `json:"rejected"`
+	Accepted   int                  `json:"accepted"`
+	Duplicates int                  `json:"duplicates"`
+	Rejected   []requests.Rejection `json:"rejected"`
 }
 
 // A 1,000-recipient batch with one repeated recipient and one invalid contact returns the
@@ -38,7 +38,7 @@ func TestAcceptBatchEndToEnd(t *testing.T) {
 		Log:    slog.New(slog.DiscardHandler),
 		Store:  postgres.NewNotificationStore(db, 5000),
 		APIKey: "k",
-		Policy: domain.Policy{
+		Policy: requests.Policy{
 			BatchLimit: 3000,
 			Expiry:     map[string]time.Duration{"match_alert": 2 * time.Hour},
 		},
@@ -80,7 +80,7 @@ func TestAcceptBatchEndToEnd(t *testing.T) {
 
 	code, got := send()
 	if code != http.StatusAccepted || got.Accepted != 998 || got.Duplicates != 1 ||
-		len(got.Rejected) != 1 || got.Rejected[0].RecipientID != "u_bad" || got.Rejected[0].Reason != domain.ReasonInvalidContact {
+		len(got.Rejected) != 1 || got.Rejected[0].RecipientID != "u_bad" || got.Rejected[0].Reason != requests.ReasonInvalidContact {
 		t.Fatalf("first send: %d %+v", code, got)
 	}
 	if n := rows(`SELECT count(*) FROM deliveries`); n != 998 {
