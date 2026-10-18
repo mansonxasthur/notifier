@@ -98,13 +98,13 @@ Done when killing a relay mid-batch, or restarting the broker, ends with every d
 
 Goal: a deliverable message path end to end, with a provider that behaves realistically.
 
-- [ ] `Provider` port and a registry that maps each channel to its providers
-- [ ] Simulated provider, run as its own small service in docker-compose, with its modes (succeed, fail permanently, fail transiently, slow, time out, accept then send a late failure webhook) set by configuration, so slow and timed-out calls can be tested against each provider's timeout; it accepts both content forms (inline content, or a template ID with variables)
-- [ ] The simulated provider honors the `delivery_id` reference key, echoes it in webhooks, and offers a status lookup by that key (which can be switched off per provider)
-- [ ] Sender consumes one channel queue, records the delivery in the inbox (a conditional update to PROCESSING decides which worker sends), and makes one call to one provider
-- [ ] Delivery states `PENDING`, `ACCEPTED`, `DELIVERED`, `FAILED`, `UNRESOLVED` with guarded transitions, where `PENDING` may go straight to `FAILED` (and to `DELIVERED` or `FAILED` on an early webhook)
-- [ ] Webhook endpoint (served by the API entry point) with signature check, fast acknowledgement, and matching by the `delivery_id` reference key
-- [ ] One log line per attempt with provider, failure class, and outcome (no extra table)
+- [x] `Provider` port and a registry that maps each channel to its providers
+- [x] Simulated provider, run as its own small service in docker-compose, with its modes (succeed, fail permanently, fail transiently, slow, time out, accept then send a late failure webhook) set by configuration, so slow and timed-out calls can be tested against each provider's timeout; it accepts both content forms (inline content, or a template ID with variables)
+- [x] The simulated provider honors the `delivery_id` reference key, echoes it in webhooks, and offers a status lookup by that key (which can be switched off per provider)
+- [x] Sender consumes one channel queue, records the delivery in the inbox (a conditional update to PROCESSING decides which worker sends), and makes one call to one provider
+- [x] Delivery states `PENDING`, `ACCEPTED`, `DELIVERED`, `FAILED`, `UNRESOLVED` with guarded transitions, where `PENDING` may go straight to `FAILED` (and to `DELIVERED` or `FAILED` on an early webhook)
+- [x] Webhook endpoint (served by the API entry point) with signature check, fast acknowledgement, and matching by the `delivery_id` reference key
+- [x] One log line per attempt with provider, failure class, and outcome (no extra table)
 
 Done when a message flows from request to `DELIVERED` through a simulated provider, including the late-webhook path.
 

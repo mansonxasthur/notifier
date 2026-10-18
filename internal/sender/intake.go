@@ -10,17 +10,19 @@ import (
 	"github.com/mansonxasthur/notifier/internal/ports"
 )
 
-// Send performs the work for a delivery this sender won the claim for.
-type Send func(ctx context.Context, deliveryID int64, provider string) error
-
-// LogOnly is the Send used until the provider call exists: it records the claim and leaves
-// the inbox row in PROCESSING, so the janitor's recovery path stays exercised.
-func LogOnly(log *slog.Logger) Send {
-	return func(_ context.Context, deliveryID int64, provider string) error {
-		log.Info("claimed delivery", "delivery_id", deliveryID, "provider", provider)
-		return nil
-	}
+// Claimed is a delivery this sender won the claim for. ClaimCount is the fencing token:
+// the sender's later updates to the inbox row apply only while the row still carries it.
+type Claimed struct {
+	DeliveryID int64
+	Provider   string
+	ClaimCount int
+	// Retries is how many retries the row has already used on this provider.
+	Retries int
 }
+
+// Send performs the work for a claimed delivery. A returned error leaves the inbox row in
+// PROCESSING, where the janitor recovers it.
+type Send func(ctx context.Context, c Claimed) error
 
 // Intake turns queue messages into inbox claims.
 type Intake struct {
@@ -45,15 +47,16 @@ func (i *Intake) Handler(ch domain.Channel) (ports.Handler, error) {
 		return nil, fmt.Errorf("no primary provider for channel %s", ch)
 	}
 	return func(ctx context.Context, deliveryID int64) error {
-		res, err := i.inbox.Claim(ctx, deliveryID, provider, i.maxClaims)
+		claim, err := i.inbox.Claim(ctx, deliveryID, provider, i.maxClaims)
 		if err != nil {
 			return fmt.Errorf("claim delivery %d: %w", deliveryID, err)
 		}
-		switch res {
+		switch claim.Result {
 		case domain.InboxClaimWon:
 			// A failed send is not returned: requeueing the message would only produce a
 			// duplicate that is dropped. The row stays PROCESSING and the janitor recovers it.
-			if err := i.send(ctx, deliveryID, provider); err != nil {
+			c := Claimed{DeliveryID: deliveryID, Provider: provider, ClaimCount: claim.ClaimCount, Retries: claim.Retries}
+			if err := i.send(ctx, c); err != nil {
 				i.log.Error("send failed", "delivery_id", deliveryID, "provider", provider, "error", err)
 			}
 		case domain.InboxClaimDead:

@@ -8,6 +8,7 @@ import (
 
 	"github.com/mansonxasthur/notifier/internal/adapters/postgres"
 	"github.com/mansonxasthur/notifier/internal/adapters/redis"
+	"github.com/mansonxasthur/notifier/internal/adapters/webhookauth"
 	"github.com/mansonxasthur/notifier/internal/app"
 	"github.com/mansonxasthur/notifier/internal/config"
 	"github.com/mansonxasthur/notifier/internal/httpserver"
@@ -21,15 +22,31 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	if err := cfg.Require(config.Postgres, config.Redis, config.APIKey); err != nil {
 		return nil, err
 	}
+	if err := cfg.RequireWebhookSecrets(); err != nil {
+		return nil, err
+	}
+	authenticators, err := webhookauth.FromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
 	db := postgres.New(cfg.DatabaseURL)
 	cache := redis.New(cfg.RedisURL)
 	mux := httpserver.Health(log, db, cache)
-	err := httpserver.RegisterNotifications(mux, httpserver.NotificationsOptions{
+	err = httpserver.RegisterNotifications(mux, httpserver.NotificationsOptions{
 		Log:          log,
 		Store:        postgres.NewNotificationStore(db, cfg.Accept.ChunkSize),
 		APIKey:       cfg.APIKey,
 		Policy:       policy(cfg),
 		MaxBodyBytes: cfg.Accept.MaxBodyBytes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	err = httpserver.RegisterWebhooks(mux, httpserver.WebhooksOptions{
+		Log:            log,
+		Store:          postgres.NewWebhookStore(db),
+		Authenticators: authenticators,
+		Channels:       cfg.ProviderChannels(),
 	})
 	if err != nil {
 		return nil, err

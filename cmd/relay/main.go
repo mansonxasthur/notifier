@@ -41,7 +41,7 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 		MaxAttempts:  cfg.Relay.MaxAttempts,
 		Backoff:      backoff,
 	}, log)
-	j := relay.NewJanitor(outbox, postgres.NewInboxStore(db), provider.Unchecked{}, relay.JanitorConfig{
+	j := relay.NewJanitor(outbox, postgres.NewInboxStore(db), provider.NewRegistry(cfg, nil), relay.JanitorConfig{
 		Interval:         cfg.Relay.Janitor.Interval,
 		OutboxStuckAfter: cfg.Relay.Janitor.OutboxStuckAfter,
 		InboxStuckMargin: cfg.Relay.Janitor.InboxStuckMargin,

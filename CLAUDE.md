@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Phases 1-3 are built: foundations, the accept path, and the relay with its queue and janitor (the sender only claims inbox rows and logs; the provider call is Phase 4). Sender and simulated provider, resilience and limits (Phases 4-6) are not built yet. The design lives in `docs/` and is the source of truth:
+Phases 1-4 are built: foundations, the accept path, the relay with its queue and janitor, and the sender with the simulated provider and the webhook endpoint. The sender makes one provider call per claim; a provider failure or timeout is parked in `WAITING_RETRY` and nothing retries it yet. Resilience and limits (Phases 5-6) are not built yet. The design lives in `docs/` and is the source of truth:
 
 - `docs/notification_system_design_decision_log.md` — every design decision and its rationale. **Record any change to a decision here first**, before changing code.
 - `docs/notification_system_implementation_plan.md` — 8 phases (foundations → accept path → relay/queue/janitor → sender + simulated provider → resilience → limits → verification → deliverables) with checklists and "done when" criteria. Build in that order, as thin vertical slices.
 
-`go.mod` declares module `github.com/mansonxasthur/notifier` (Go 1.26.3). Layout: `cmd/{api,relay,sender,simprovider}` (thin mains on `internal/app`), `internal/{domain,ports,adapters,config,lifecycle,httpserver,logging}`, `config/config.yaml` (defaults; connection strings come from `DATABASE_URL`, `AMQP_URL`, `REDIS_URL`), `migrations/`, `infra/`. Provider config marks one `primary` per channel (the rest are fallbacks in list order); `simulation: true` routes provider calls to the simulator. `.githooks/` exists; run `make hooks` once per clone.
+`go.mod` declares module `github.com/mansonxasthur/notifier` (Go 1.26.3). Layout: `cmd/{api,relay,sender,simprovider}` (thin mains on `internal/app`), `internal/{domain,ports,adapters,config,lifecycle,httpserver,logging,relay,sender,simprovider,e2e}`, `config/config.yaml` (defaults; connection strings come from `DATABASE_URL`, `AMQP_URL`, `REDIS_URL`; each provider's webhook secret from the variable its `webhook.secret_env` names), `migrations/`, `infra/`. Provider config marks one `primary` per channel (the rest are fallbacks in list order); `simulation: true` routes provider calls to the simulator. `.githooks/` exists; run `make hooks` once per clone.
 
 ## Workflow (mandatory)
 
