@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/mansonxasthur/notifier/internal/domain"
@@ -54,6 +55,15 @@ func (s *WebhookStore) Apply(ctx context.Context, e ports.WebhookEvent) (bool, e
 		return false, fmt.Errorf("apply webhook: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	var channel domain.Channel
+	err = tx.QueryRow(ctx, `SELECT channel FROM deliveries WHERE id = $1`, e.DeliveryID).Scan(&channel)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && channel != e.Channel) {
+		return false, ports.ErrDeliveryNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("apply webhook: %w", err)
+	}
 
 	tag, err := tx.Exec(ctx, applyWebhook, e.DeliveryID, string(e.Outcome), reason, sources)
 	if err != nil {

@@ -178,7 +178,7 @@ func TestWebhookApply(t *testing.T) {
 	ctx := context.Background()
 	event := func(id int64, outcome domain.DeliveryState, reason domain.FailureReason) ports.WebhookEvent {
 		return ports.WebhookEvent{
-			DeliveryID: id, Provider: "sms-a", EventType: string(outcome),
+			DeliveryID: id, Provider: "sms-a", Channel: domain.ChannelSMS, EventType: string(outcome),
 			Payload: []byte(`{"delivery_id":1,"note":"مرحبا"}`), Outcome: outcome, Reason: reason,
 		}
 	}
@@ -273,6 +273,22 @@ func TestWebhookApply(t *testing.T) {
 		store := postgres.NewWebhookStore(db)
 		if _, err := store.Apply(ctx, event(999999, domain.DeliveryDelivered, "")); !errors.Is(err, ports.ErrDeliveryNotFound) {
 			t.Errorf("err = %v, want ErrDeliveryNotFound", err)
+		}
+		if got := count(t, db.Pool(), `SELECT count(*) FROM webhook_events`); got != 0 {
+			t.Errorf("webhook_events = %d, want 0", got)
+		}
+	})
+
+	t.Run("a provider of another channel cannot settle the delivery", func(t *testing.T) {
+		db := seed(t, 1)
+		store, id := postgres.NewWebhookStore(db), deliveryID(t, db)
+		e := event(id, domain.DeliveryDelivered, "")
+		e.Provider, e.Channel = "email-a", domain.ChannelEmail
+		if _, err := store.Apply(ctx, e); !errors.Is(err, ports.ErrDeliveryNotFound) {
+			t.Errorf("err = %v, want ErrDeliveryNotFound", err)
+		}
+		if got := state(t, db, deliveryState, id); got != "PENDING" {
+			t.Errorf("delivery = %s, want PENDING", got)
 		}
 		if got := count(t, db.Pool(), `SELECT count(*) FROM webhook_events`); got != 0 {
 			t.Errorf("webhook_events = %d, want 0", got)
