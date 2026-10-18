@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Phases 1-4 are built: foundations, the accept path, the relay with its queue and janitor, and the sender with the simulated provider and the webhook endpoint. The sender makes one provider call per claim; a provider failure or timeout is parked in `WAITING_RETRY` and nothing retries it yet. Resilience and limits (Phases 5-6) are not built yet. The design lives in `docs/` and is the source of truth:
+Phases 1-5 are built: foundations, the accept path, the relay with its queue and janitor, the sender with the simulated provider and the webhook endpoint, and resilience. The sender retries a provider with backoff from a scan of due `WAITING_RETRY` rows, switches to the channel's next provider once a provider's retries are spent, asks the provider whether it holds a message after a timeout, runs a local circuit breaker per provider, and checks the deadline before every send; the janitor makes the same check for rows stuck in `PROCESSING`. Limits (Phase 6) are not built yet: no per-provider token bucket, no rate limit, no Redis use. The design lives in `docs/` and is the source of truth:
 
 - `docs/notification_system_design_decision_log.md` — every design decision and its rationale. **Record any change to a decision here first**, before changing code.
 - `docs/notification_system_implementation_plan.md` — 8 phases (foundations → accept path → relay/queue/janitor → sender + simulated provider → resilience → limits → verification → deliverables) with checklists and "done when" criteria. Build in that order, as thin vertical slices.

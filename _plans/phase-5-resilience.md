@@ -69,3 +69,22 @@ Update CLAUDE.md Status, the plan checklist boxes, and add `docs/sessions/2026-1
 1. Token bucket stays in Phase 6 (the Phase 5 checklist omits it).
 2. Reconciler and Redis breaker excluded.
 3. `NotFound` on the second provider ends `FAILED`, not `UNRESOLVED` (Decision Log addition in step 1).
+
+## Deviations made while building
+
+- **No OpenAPI spec exists yet**, so the two new reasons went into `internal/domain/state.go` only, and the Decision Log says so. The plan had them in both.
+- **`NewAttempt` takes a `Routing`** (provider order per channel and a `domain.RetryPolicy` per provider) instead of a backoff map. `Config.ProviderBackoffs()` became `ProviderRetryPolicies()`, and `ProviderOrder()` is new. The order comes from the config rather than from `Registry.Providers(ch)`, because the sender needs names, not provider objects.
+- **`Switch` takes the failure class** (the plan's signature had none), so the next attempt still knows how the last one failed.
+- **`Breakers.Release`** was added to give back a half-open probe slot when a call tells us nothing about the provider (a message-level rejection or a cancelled caller). Without it the breaker could stay half-open forever.
+- **The breaker has no cache.** The plan's checklist line mentioned one; with state in the sender's own memory it has nothing to save. The implementation plan's line was reworded.
+- **Expiry stores no failure class.** An expired delivery was never attempted, so `Fail` is called with an empty class.
+- **`NO_PROVIDER_AVAILABLE`** is raised when the breaker is open on the last provider. When the primary's breaker is open the row switches to the fallback first, and the next attempt fails if that breaker is open too; the plan allowed either.
+- **The end-to-end test turns the breaker off** (a very high failure threshold). With it on, a run of failures would change which provider a delivery uses and the oracle could not predict the outcome. The breaker has its own unit tests. The oracle now covers both providers, and the test also fails if any scenario is never drawn at a fallback.
+- **Intake sends to the claimed row's provider** (`InboxClaim.Provider`), a change to step 5 that step 4 needed.
+- **The janitor's `Provider` carries `Next` and `Backoff`**, built in `cmd/relay` from the channel's provider order.
+- **No migration was needed**; `inbox_due_idx` already served the scan.
+
+Not built, as planned: the per-provider token bucket and the 429 `Retry-After` (Phase 6), the reconciler sweep, and the Redis-shared breaker.
+
+Review findings left: a `ClaimDue` batch aborts if one row's dead-letter write fails (the transaction would be poisoned by the failed statement anyway), and `reclaim` does not check that its update matched a row (the row is locked and its state was just read).
+
