@@ -25,6 +25,7 @@ type Config struct {
 	HTTP              HTTP                        `yaml:"http"`
 	BatchLimit        int                         `yaml:"batch_limit"`
 	Accept            Accept                      `yaml:"accept"`
+	Limits            Limits                      `yaml:"limits"`
 	NotificationTypes map[string]NotificationType `yaml:"notification_types"`
 	Simulation        bool                        `yaml:"simulation"`
 	SimulationURL     string                      `yaml:"simulation_url"`
@@ -63,6 +64,25 @@ type Accept struct {
 	MaxBodyBytes int64 `yaml:"max_body_bytes"`
 }
 
+// Limits holds the intake limits.
+type Limits struct {
+	// Global is the Dispatcher's limit on total intake, in deliveries per second.
+	Global RateLimit `yaml:"global"`
+}
+
+// RateLimit configures a token bucket.
+type RateLimit struct {
+	// Rate is the tokens added per second.
+	Rate float64 `yaml:"rate"`
+	// Burst is the bucket's capacity.
+	Burst int `yaml:"burst"`
+}
+
+// Policy converts the configured limit to the domain type.
+func (r RateLimit) Policy() domain.BucketPolicy {
+	return domain.BucketPolicy{Rate: r.Rate, Burst: r.Burst}
+}
+
 type HTTP struct {
 	Addr string `yaml:"addr"`
 }
@@ -85,7 +105,9 @@ type Provider struct {
 	StatusLookup bool          `yaml:"status_lookup"`
 	MaxRetries   int           `yaml:"max_retries"`
 	Backoff      Backoff       `yaml:"backoff"`
-	Webhook      Webhook       `yaml:"webhook"`
+	// RateLimit caps the calls per second one sender makes to this provider.
+	RateLimit RateLimit `yaml:"rate_limit"`
+	Webhook   Webhook   `yaml:"webhook"`
 }
 
 // WebhookAuth names how a provider authenticates the webhooks it sends us.
@@ -286,6 +308,12 @@ func (c *Config) Validate() error {
 		bad("accept.max_body_bytes must be positive")
 	}
 
+	if err := c.Limits.Global.Policy().Validate(); err != nil {
+		bad("limits.global: %v", err)
+	} else if need := c.BatchLimit * len(domain.Channels()); c.BatchLimit > 0 && !c.Limits.Global.Policy().Fits(need) {
+		bad("limits.global.burst must be at least batch_limit times the number of channels (%d), or the largest request could never pass", need)
+	}
+
 	if len(c.NotificationTypes) == 0 {
 		bad("notification_types must not be empty")
 	}
@@ -388,6 +416,9 @@ func (cc Channel) validate(name string, simulation bool) []error {
 		}
 		if p.MaxRetries < 0 {
 			bad("%s.max_retries must not be negative", at)
+		}
+		if err := p.RateLimit.Policy().Validate(); err != nil {
+			bad("%s.rate_limit: %v", at, err)
 		}
 		errs = append(errs, p.Backoff.validate(at+".backoff")...)
 		errs = append(errs, p.Webhook.validate(at+".webhook")...)
@@ -533,6 +564,17 @@ func (c *Config) ProvidersByName() map[string]Provider {
 	for _, cc := range c.Channels {
 		for _, p := range cc.Providers {
 			out[p.Name] = p
+		}
+	}
+	return out
+}
+
+// ProviderRateLimits maps each provider name to its rate limit.
+func (c *Config) ProviderRateLimits() map[string]domain.BucketPolicy {
+	out := map[string]domain.BucketPolicy{}
+	for _, cc := range c.Channels {
+		for _, p := range cc.Providers {
+			out[p.Name] = p.RateLimit.Policy()
 		}
 	}
 	return out

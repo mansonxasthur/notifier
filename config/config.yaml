@@ -18,6 +18,15 @@ accept:
   chunk_size: 5000
   max_body_bytes: 4194304
 
+# Intake limit, a token bucket counted in deliveries (recipients x channels), not requests.
+# rate: deliveries per second, sized from the system-wide 500K/s peak (one machine cannot
+# prove it; the database is the bottleneck). burst: capacity, and the largest request that can
+# ever pass, so it must be at least batch_limit x 3 channels. Above it the API answers 429
+# with Retry-After. Counters live in Redis; each instance falls back to a local bucket with
+# the same numbers if Redis is unreachable.
+limits:
+  global: {rate: 500000, burst: 1000000}
+
 # Default expiry for a delivery when the request carries no expires_at.
 notification_types:
   password_reset: {expiry: 15m}
@@ -47,6 +56,8 @@ simprovider:
 # webhook: how the provider authenticates its webhooks to POST /v1/webhooks/<name>. auth is
 # hmac_signature (header = hex HMAC-SHA256 of the body) or shared_secret_header (header = the
 # secret). secret_env names the environment variable holding the secret.
+# rate_limit: a token bucket per sender in front of every call to the provider (calls per
+# second, burst = capacity); when it is empty the delivery waits and no retry is spent.
 channels:
   email:
     providers:
@@ -57,6 +68,7 @@ channels:
         status_lookup: true
         max_retries: 1
         backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        rate_limit: {rate: 200000, burst: 20000}
         webhook: {auth: hmac_signature, header: X-Signature, secret_env: WEBHOOK_SECRET_EMAIL_A}
       - name: email-b
         primary: false
@@ -65,6 +77,7 @@ channels:
         status_lookup: false
         max_retries: 1
         backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        rate_limit: {rate: 200000, burst: 20000}
         webhook: {auth: shared_secret_header, header: X-Webhook-Token, secret_env: WEBHOOK_SECRET_EMAIL_B}
   sms:
     providers:
@@ -75,6 +88,7 @@ channels:
         status_lookup: true
         max_retries: 1
         backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        rate_limit: {rate: 200000, burst: 20000}
         webhook: {auth: hmac_signature, header: X-Signature, secret_env: WEBHOOK_SECRET_SMS_A}
       - name: sms-b
         primary: false
@@ -83,6 +97,7 @@ channels:
         status_lookup: false
         max_retries: 1
         backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        rate_limit: {rate: 200000, burst: 20000}
         webhook: {auth: shared_secret_header, header: X-Webhook-Token, secret_env: WEBHOOK_SECRET_SMS_B}
   whatsapp:
     providers:
@@ -93,6 +108,7 @@ channels:
         status_lookup: true
         max_retries: 1
         backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        rate_limit: {rate: 200000, burst: 20000}
         webhook: {auth: hmac_signature, header: X-Signature, secret_env: WEBHOOK_SECRET_WHATSAPP_A}
       - name: whatsapp-b
         primary: false
@@ -101,6 +117,7 @@ channels:
         status_lookup: false
         max_retries: 1
         backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        rate_limit: {rate: 200000, burst: 20000}
         webhook: {auth: shared_secret_header, header: X-Webhook-Token, secret_env: WEBHOOK_SECRET_WHATSAPP_B}
 
 relay:
