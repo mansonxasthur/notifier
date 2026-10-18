@@ -27,6 +27,14 @@ Departures from the written plan:
 - Broker reconnect is lazy: `Conn.Channel` redials when the connection is closed, so no `Failer` is needed.
 - The inbox sweep and the sender intake share one `InboxStore`, extended with `ListStuck`, `Requeue` and `Accept`.
 
+After the first pull request was opened, the engineer asked for three changes, which were made on the same branch:
+
+1. `relay.batch_size` default raised from 500 to 2,000.
+2. A configurable `relay.workers` (default 8): each worker runs its own claim-and-publish loop with its own broker channel, and `SKIP LOCKED` keeps workers off each other's rows. This replaced the single loop per relay.
+3. `MarkPublished` takes the whole batch and updates all confirmed rows in one fenced statement (arrays of delivery IDs and `retries`), instead of one update per row. Unconfirmed rows are still released one at a time.
+
+The decision log was updated first, tests cover a batch with one stale claim, and a second `code-review` pass raised two findings that needed no change (publishers are not closed under workers that missed the stop deadline; `relay.workers` is validated in config).
+
 Review findings fixed: a failed send after a won claim no longer requeues the message (the redelivery would only be a dropped duplicate); a failing handler waits before the requeue, so an outage is not a hot loop; handlers get a deadline because they no longer see the consumer's cancellation; the relay builds one outbox store.
 
 Review findings left for later phases: the sender is wired to a logging stub until Phase 4; a failed provider check is treated as unknown, which Phase 5 refines per the decision log; channel groups of one batch are published one after another.
