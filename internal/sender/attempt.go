@@ -70,6 +70,8 @@ type attemptRun struct {
 	provider ports.Provider
 	// next is the provider after this one, or "" when this is the last.
 	next string
+	// ticket is the breaker's pass for this call; the result is reported with it.
+	ticket Ticket
 }
 
 // Send implements Send. An attempt that gets an answer ends in one log line with the
@@ -104,7 +106,8 @@ func (a *Attempt) Send(ctx context.Context, c Claimed) error {
 	if !d.ExpiresAt.IsZero() && !a.now().Before(d.ExpiresAt) {
 		return a.fail(settleCtx, run, "", domain.ReasonExpired)
 	}
-	if !a.breakers.Allow(c.Provider) {
+	ticket, allowed := a.breakers.Allow(c.Provider)
+	if !allowed {
 		if run.next == "" {
 			return a.noProvider(settleCtx, run)
 		}
@@ -114,10 +117,11 @@ func (a *Attempt) Send(ctx context.Context, c Claimed) error {
 	// The token comes after the breaker, so a call the breaker refuses wastes none. A refusal
 	// here gives back the half-open probe slot the breaker just handed out.
 	if ok, wait := a.limits.Take(c.Provider); !ok {
-		a.breakers.Release(c.Provider)
+		a.breakers.Release(c.Provider, ticket)
 		return a.throttle(settleCtx, run, wait, d.ExpiresAt)
 	}
 
+	run.ticket = ticket
 	err = run.provider.Send(ctx, ports.SendRequest{DeliveryID: d.ID, Channel: d.Channel, Contact: d.Contact, Content: d.Content})
 	return a.settle(ctx, run, err)
 }
@@ -169,7 +173,7 @@ func (a *Attempt) settle(ctx context.Context, run attemptRun, sendErr error) err
 	provider := run.c.Provider
 
 	if sendErr == nil {
-		if a.breakers.Success(provider) == Closed {
+		if a.breakers.Success(provider, run.ticket) == Closed {
 			a.outage.Store(false)
 		}
 		return a.complete(settleCtx, run.c, "")
@@ -179,17 +183,17 @@ func (a *Attempt) settle(ctx context.Context, run attemptRun, sendErr error) err
 	if !classified {
 		// Not a statement about the provider, such as shutdown. The row stays PROCESSING
 		// and the janitor decides what happened.
-		a.breakers.Release(provider)
+		a.breakers.Release(provider, run.ticket)
 		return sendErr
 	}
 
 	if class == domain.FailureMessage {
 		// The provider refused this message, not itself: the breaker learns nothing.
-		a.breakers.Release(provider)
+		a.breakers.Release(provider, run.ticket)
 		return a.fail(settleCtx, run, class, domain.ReasonProviderRejected, "error", sendErr)
 	}
 
-	if a.breakers.Failure(provider) == Opened {
+	if a.breakers.Failure(provider, run.ticket) == Opened {
 		a.log.Warn("circuit breaker opened", "provider", provider)
 	}
 	if class == domain.FailureTimeout {

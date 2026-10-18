@@ -221,9 +221,7 @@ func TestTimeoutAsksTheProvider(t *testing.T) {
 
 func TestBreakers(t *testing.T) {
 	open := func(f *fixture, provider string) {
-		for range 3 {
-			f.breaker.Failure(provider)
-		}
+		tripBreaker(f.breaker, provider)
 	}
 
 	t.Run("open breaker on the primary: switch without a call or a spent retry", func(t *testing.T) {
@@ -259,12 +257,13 @@ func TestBreakers(t *testing.T) {
 		}
 		// A provider that recovers ends the outage, so the next one is reported again.
 		f.clock.advance(10 * time.Second)
-		if !f.breaker.Allow("sms-b") {
+		probe, ok := f.breaker.Allow("sms-b")
+		if !ok {
 			t.Fatal("probe refused")
 		}
 		f.attempt.outage.Store(true)
 		// The claim is stale, so the inbox write changes nothing; only the breaker matters.
-		if err := f.attempt.settle(context.Background(), attemptRun{c: f.claim}, nil); err != nil {
+		if err := f.attempt.settle(context.Background(), attemptRun{c: f.claim, ticket: probe}, nil); err != nil {
 			t.Fatal(err)
 		}
 		if f.attempt.outage.Load() {
@@ -277,7 +276,7 @@ func TestBreakers(t *testing.T) {
 		for range 5 {
 			f.send(t)
 		}
-		if !f.breaker.Allow("sms-a") {
+		if !f.breaker.can("sms-a") {
 			t.Error("message-level rejections must not open the breaker")
 		}
 
@@ -288,7 +287,7 @@ func TestBreakers(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if g.breaker.Allow("sms-a") {
+		if g.breaker.can("sms-a") {
 			t.Error("three provider failures should open the breaker")
 		}
 	})

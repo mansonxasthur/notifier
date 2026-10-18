@@ -143,9 +143,7 @@ func TestThrottleNeverWaitsPastTheDeadline(t *testing.T) {
 
 func TestAnOpenBreakerWastesNoToken(t *testing.T) {
 	f := limitedFixture(t, domain.BucketPolicy{Rate: 0.001, Burst: 1})
-	for range 3 {
-		f.breaker.Failure("sms-a")
-	}
+	tripBreaker(f.breaker, "sms-a")
 	if err := f.attempt.Send(context.Background(), f.claim); err != nil {
 		t.Fatal(err)
 	}
@@ -161,9 +159,7 @@ func TestThrottleDoesNotTouchTheBreaker(t *testing.T) {
 	f := limitedFixture(t, domain.BucketPolicy{Rate: 1, Burst: 1})
 	f.spend(t)
 	// Put the breaker in its half-open state, with a probe available.
-	for range 3 {
-		f.breaker.Failure("sms-a")
-	}
+	tripBreaker(f.breaker, "sms-a")
 	f.clock.advance(10 * time.Second)
 	f.attempt.limits = NewProviderLimits(map[string]domain.BucketPolicy{"sms-a": {Rate: 1, Burst: 1}}, f.clock.now)
 	f.spend(t)
@@ -171,7 +167,7 @@ func TestThrottleDoesNotTouchTheBreaker(t *testing.T) {
 	if err := f.attempt.Send(context.Background(), f.claim); err != nil {
 		t.Fatal(err)
 	}
-	if !f.breaker.Allow("sms-a") {
+	if !f.breaker.can("sms-a") {
 		t.Fatal("a throttled send took the half-open probe slot")
 	}
 }
