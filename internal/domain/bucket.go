@@ -25,6 +25,9 @@ func (p BucketPolicy) Validate() error {
 	if p.Burst < 1 {
 		return errors.New("burst must be at least 1")
 	}
+	if float64(p.Burst)/p.Rate > MaxWait.Seconds() {
+		return errors.New("burst is too high for the rate: an empty bucket must refill within MaxWait")
+	}
 	return nil
 }
 
