@@ -37,15 +37,6 @@ type unit struct {
 	channel   domain.Channel
 }
 
-func hasAccepted(seen map[unit]bool, recipient string) bool {
-	for _, ch := range domain.Channels() {
-		if seen[unit{recipient, ch}] {
-			return true
-		}
-	}
-	return false
-}
-
 // Validate checks the request and splits it into deliveries and per-recipient rejections.
 // It returns an error when the request as a whole cannot be accepted.
 func (r CreateNotificationRequest) Validate(p Policy, now time.Time) (Validated, error) {
@@ -74,22 +65,12 @@ func (r CreateNotificationRequest) Validate(p Policy, now time.Time) (Validated,
 	n := &domain.Notification{IdempotencyKey: key.String(), Type: r.Type, Content: map[domain.Channel]domain.Content{}}
 	out := Validated{Notification: n}
 	seen := make(map[unit]bool)
-	rejected := make(map[string]bool)
 
 	for _, rec := range r.Recipients {
-		if rejected[rec.ID] {
-			// Reported once already; a repeat is not a second rejection.
-			out.Duplicates += len(rec.Channels)
-			continue
-		}
 		rows, reason := r.validateRecipient(rec, expiresAt)
 		if reason != "" {
-			if hasAccepted(seen, rec.ID) {
-				// The first occurrence won; this copy is a repeat, not a rejection.
-				out.Duplicates += len(rec.Channels)
-				continue
-			}
-			rejected[rec.ID] = true
+			// Every invalid entry is reported, so a bad repeat is never hidden and a
+			// valid repeat of an invalid entry is never dropped.
 			out.Rejected = append(out.Rejected, Rejection{RecipientID: rec.ID, Reason: reason})
 			continue
 		}

@@ -200,27 +200,27 @@ func TestValidateMixedBatch(t *testing.T) {
 	}
 }
 
-func TestValidateBadRepeatOfAcceptedRecipientIsDuplicate(t *testing.T) {
-	good := rec("u_1", map[domain.Channel]string{domain.ChannelSMS: "+201000000000"})
+func TestValidateBadRepeatOfAcceptedRecipientIsStillRejected(t *testing.T) {
+	good := rec("u_1", map[domain.Channel]string{domain.ChannelEmail: "a@x.com"})
 	bad := rec("u_1", map[domain.Channel]string{domain.ChannelSMS: "nope"})
 	v, err := submission(good, bad).Validate(policy, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(v.Rejected) != 0 || v.Duplicates != 1 || len(v.Notification.Deliveries) != 1 {
-		t.Fatalf("got %+v, want u_1 accepted once and the repeat counted as a duplicate", v)
+	if len(v.Rejected) != 1 || v.Rejected[0].Reason != ReasonInvalidContact || v.Duplicates != 0 || len(v.Notification.Deliveries) != 1 {
+		t.Fatalf("got %+v, want the bad entry reported and the good one accepted", v)
 	}
 }
 
-func TestValidateRepeatOfRejectedRecipientIsReportedOnce(t *testing.T) {
+func TestValidateValidRepeatOfRejectedRecipientIsAccepted(t *testing.T) {
 	bad := rec("u_1", map[domain.Channel]string{domain.ChannelSMS: "nope"})
 	good := rec("u_1", map[domain.Channel]string{domain.ChannelSMS: "+201000000000"})
 	v, err := submission(bad, good).Validate(policy, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(v.Rejected) != 1 || len(v.Notification.Deliveries) != 0 || v.Duplicates != 1 {
-		t.Fatalf("got %+v, want u_1 rejected once and never accepted", v)
+	if len(v.Rejected) != 1 || v.Duplicates != 0 || len(v.Notification.Deliveries) != 1 {
+		t.Fatalf("got %+v, want the valid entry accepted, not dropped as a duplicate", v)
 	}
 }
 
