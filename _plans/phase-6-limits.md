@@ -87,8 +87,10 @@ Edit `docs/notification_system_design_decision_log.md`:
 - **`RegisterNotifications` refuses a nil limiter**, so intake can never be unlimited by omission.
 - **`newStack` in `internal/e2e` takes config changes**, which the two new end-to-end cases use.
 
+- **Follow-ups added after review, at the engineer's request:** breaker tickets (only the probe closes or reopens a half-open breaker), a deadline check in the janitor, a cap on free deferrals (`sender.max_deferrals`), and a retry scan that runs per channel with 500 rows per channel (`sender.scan_batch`, was 50 across all channels).
+
 Not built, as planned: a shared (Redis) provider bucket, a reservation scheme for deferred rows, and per-service quotas.
 
 Known limits, recorded in the decision log: the provider bucket is per sender, so N senders can send a provider up to N times its rate; a deep backlog is re-claimed and re-deferred in rounds, so database work grows with the backlog; a Redis timeout after the charge is taken is also charged locally; with N Dispatchers and Redis down the effective global limit is up to N times the rate; a replayed or failed request still costs its tokens.
 
-Review findings left: any success while a breaker is half-open closes it, because telling the probe's success from a stale one would need a ticket per call; a janitor requeue does not check the deadline, which the sender's expiry check catches on the next attempt; the scan starts one goroutine per claimed row, bounded by `scan_batch`.
+Review findings left: the scan still starts one goroutine per claimed row, now bounded by `scan_batch` per channel.
