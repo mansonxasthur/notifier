@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Early stage: no Go source exists yet (`cmd/`, `internal/`, `infra/`, `_features/`, `_plans/` are empty). The design lives in `docs/` and is the source of truth:
+Phase 1 (foundations) is built: the three entry points plus a `simprovider` stub start, connect, and shut down cleanly; migrations and the compose stack exist. Accept path, relay, sender and resilience (Phases 2-6) are not built yet. The design lives in `docs/` and is the source of truth:
 
 - `docs/notification_system_design_decision_log.md` — every design decision and its rationale. **Record any change to a decision here first**, before changing code.
 - `docs/notification_system_implementation_plan.md` — 8 phases (foundations → accept path → relay/queue/janitor → sender + simulated provider → resilience → limits → verification → deliverables) with checklists and "done when" criteria. Build in that order, as thin vertical slices.
 
-`go.mod` declares module `github.com/mansonxasthur/notifier` (Go 1.26.3). The Makefile references files that don't exist yet (`docker-compose.yml`, `docker-compose.override.yml`, `.golangci.yml`, `.githooks/`, `migrations/`); create them when the matching phase needs them.
+`go.mod` declares module `github.com/mansonxasthur/notifier` (Go 1.26.3). Layout: `cmd/{api,relay,sender,simprovider}` (thin mains on `internal/app`), `internal/{domain,ports,adapters,config,lifecycle,httpserver,logging}`, `config/config.yaml` (defaults; connection strings come from `DATABASE_URL`, `AMQP_URL`, `REDIS_URL`), `migrations/`, `infra/`. Provider config marks one `primary` per channel (the rest are fallbacks in list order); `simulation: true` routes provider calls to the simulator. `.githooks/` exists; run `make hooks` once per clone.
 
 ## Workflow (mandatory)
 

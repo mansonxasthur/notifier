@@ -1,0 +1,10 @@
+# build output
+/bin/
+/tmp/
+*.test
+*.out
+
+# local env and editor files
+.env
+.idea/
+.vscode/
