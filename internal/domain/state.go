@@ -112,6 +112,8 @@ type OutboxClaim struct {
 type InboxClaim struct {
 	Result     InboxClaimResult
 	ClaimCount int
+	// Retries is how many retries the row has already used on its provider.
+	Retries int
 }
 
 // InboxClaimResult says what a sender learned when it tried to claim a delivery.

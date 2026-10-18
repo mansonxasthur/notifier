@@ -249,10 +249,10 @@ type countingSend struct {
 	calls map[int64]int
 }
 
-func (c *countingSend) send(_ context.Context, id int64, _ string) error {
+func (c *countingSend) send(_ context.Context, claimed sender.Claimed) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.calls[id]++
+	c.calls[claimed.DeliveryID]++
 	return nil
 }
 

@@ -502,6 +502,17 @@ func (b Backoff) Policy() domain.Backoff {
 	return domain.Backoff{Initial: b.Initial, Max: b.Max, Multiplier: b.Multiplier, Jitter: b.Jitter}
 }
 
+// ProviderBackoffs maps each provider name to its retry backoff policy.
+func (c *Config) ProviderBackoffs() map[string]domain.Backoff {
+	out := map[string]domain.Backoff{}
+	for _, cc := range c.Channels {
+		for _, p := range cc.Providers {
+			out[p.Name] = p.Backoff.Policy()
+		}
+	}
+	return out
+}
+
 // PrimaryProviders maps each channel to the name of its primary provider.
 func (c *Config) PrimaryProviders() map[domain.Channel]string {
 	out := make(map[domain.Channel]string, len(c.Channels))

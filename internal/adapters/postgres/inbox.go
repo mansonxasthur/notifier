@@ -26,7 +26,7 @@ INSERT INTO inbox (delivery_id, state, provider, claim_count)
 VALUES ($1, $2, $3, 1)
 ON CONFLICT (delivery_id) DO NOTHING`
 
-const lockInbox = `SELECT state, claim_count FROM inbox WHERE delivery_id = $1 FOR UPDATE`
+const lockInbox = `SELECT state, claim_count, retries FROM inbox WHERE delivery_id = $1 FOR UPDATE`
 
 const reclaimInbox = `
 UPDATE inbox SET state = $2, claim_count = claim_count + 1, last_try = now()
@@ -69,8 +69,8 @@ func (s *InboxStore) Claim(ctx context.Context, deliveryID int64, provider strin
 // retry can be claimed again; the row lock makes concurrent senders take turns.
 func claimExisting(ctx context.Context, tx pgx.Tx, deliveryID int64, maxClaims int) (domain.InboxClaim, error) {
 	var state domain.InboxState
-	var claims int
-	if err := tx.QueryRow(ctx, lockInbox, deliveryID).Scan(&state, &claims); err != nil {
+	var claims, retries int
+	if err := tx.QueryRow(ctx, lockInbox, deliveryID).Scan(&state, &claims, &retries); err != nil {
 		return domain.InboxClaim{}, err
 	}
 	if state != domain.InboxWaitingRetry {
@@ -89,7 +89,7 @@ func claimExisting(ctx context.Context, tx pgx.Tx, deliveryID int64, maxClaims i
 	if _, err := tx.Exec(ctx, reclaimInbox, deliveryID, domain.InboxProcessing); err != nil {
 		return domain.InboxClaim{}, err
 	}
-	return domain.InboxClaim{Result: domain.InboxClaimWon, ClaimCount: claims + 1}, nil
+	return domain.InboxClaim{Result: domain.InboxClaimWon, ClaimCount: claims + 1, Retries: retries}, nil
 }
 
 const listStuckInbox = `

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/mansonxasthur/notifier/internal/adapters/postgres"
+	"github.com/mansonxasthur/notifier/internal/adapters/provider"
 	"github.com/mansonxasthur/notifier/internal/adapters/rabbitmq"
 	"github.com/mansonxasthur/notifier/internal/app"
 	"github.com/mansonxasthur/notifier/internal/config"
@@ -22,7 +23,9 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	db := postgres.New(cfg.DatabaseURL)
 	mq := rabbitmq.New(cfg.AMQPURL)
 
-	intake := sender.NewIntake(postgres.NewInboxStore(db), cfg.PrimaryProviders(), cfg.Sender.MaxClaims, sender.LogOnly(log), log)
+	inbox := postgres.NewInboxStore(db)
+	attempt := sender.NewAttempt(postgres.NewDeliveryStore(db), inbox, provider.NewRegistry(cfg, nil), cfg.ProviderBackoffs(), log)
+	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.MaxClaims, attempt.Send, log)
 	s := sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, log), intake)
 
 	return []lifecycle.Component{db, mq, s}, nil
