@@ -2,9 +2,9 @@
 
 - **Date:** 2026-10-18
 - **Tool:** Claude Code
-- **Outcome:** Phase 4 built, issue #7, branch `feat/7-sender-simulated-provider`, pull request not yet opened (the engineer reviews and merges).
+- **Outcome:** Phase 4 built, issue #7, branch `feat/7-sender-simulated-provider`, pull request #8 opened and not merged (the engineer reviews and merges).
 
-This is a summary of the session, not a transcript. The raw log is the session's `.jsonl` file under `~/.claude/projects/`.
+This is a summary of the session, not a transcript. The raw log is the session's `.jsonl` file under `~/.claude/projects/-home-manson-Projects-notifier/`, named `a91fa3f7-fdf8-49e5-82ce-78e8069544f0.jsonl`.
 
 ## Planning
 
@@ -41,6 +41,20 @@ Review findings fixed, by theme:
 
 Review findings left, with reasons: the HMAC covers only the body, so a captured webhook can be replayed (a timestamped scheme would get its own authenticator); the simulator's registry and webhook goroutines are unbounded, which suits a simulator; expiry, the retry scan and the 429 `Retry-After` belong to Phase 5.
 
+## Commits
+
+One commit per step, then the `UNRESOLVED` change, each after `make check` and a `code-review` pass:
+
+1. `f78d669` plan
+2. `270bbee` config and domain
+3. `094b6c0` provider port, HTTP adapter and registry
+4. `267cb31` state machine, migrations and stores
+5. `6228ca7` sender
+6. `9075e6a` simulated provider
+7. `437830b` webhook endpoint
+8. `0769b99` compose secrets, end-to-end test and docs
+9. `3a1646d` late webhook can settle `UNRESOLVED`
+
 ## After the build
 
 The engineer asked whether a late webhook should be able to settle an `UNRESOLVED` delivery and decided yes: `UNRESOLVED` can be replaced by `DELIVERED` or `FAILED`, never the other way, with the rule in the application and no database constraint. The decision log was changed first, then the move table in `internal/domain`, which the webhook update's guard is built from, with tests in the domain and against Postgres.
@@ -48,3 +62,7 @@ The engineer asked whether a late webhook should be able to settle an `UNRESOLVE
 ## Verification
 
 `internal/e2e` runs the API, relay, broker, sender, simulator and webhooks against real Postgres and RabbitMQ. It submits 60 recipients on SMS and email with every scenario equally likely from a fixed seed, then compares each delivery's final state with what the simulator's registry says it decided: delivered, failed with `BOUNCED` after a late failure webhook, failed with `PROVIDER_REJECTED`, parked after a transient failure, and delivered by webhook after a timeout. It also checks that every webhook was kept and applied once. Changing one expectation makes it fail, so it does check the states.
+
+## Pull request
+
+After the engineer's go-ahead the branch was pushed and pull request #8 opened against `master`, closing issue #7. It was not merged. `make up` was not run: the compose wiring was checked with `docker compose config` and a config test only, and the pull request says so.
