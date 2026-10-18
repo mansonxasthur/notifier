@@ -11,7 +11,6 @@ import (
 	"github.com/mansonxasthur/notifier/internal/adapters/webhookauth"
 	"github.com/mansonxasthur/notifier/internal/app"
 	"github.com/mansonxasthur/notifier/internal/config"
-	"github.com/mansonxasthur/notifier/internal/domain"
 	"github.com/mansonxasthur/notifier/internal/httpserver"
 	"github.com/mansonxasthur/notifier/internal/httpserver/requests"
 	"github.com/mansonxasthur/notifier/internal/lifecycle"
@@ -47,7 +46,7 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 		Log:            log,
 		Store:          postgres.NewWebhookStore(db),
 		Authenticators: authenticators,
-		Channels:       providerChannels(cfg),
+		Channels:       cfg.ProviderChannels(),
 	})
 	if err != nil {
 		return nil, err
@@ -55,17 +54,6 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	srv := httpserver.New("http", cfg.HTTP.Addr, mux, log)
 	// The server starts last so it only listens once its dependencies are connected.
 	return []lifecycle.Component{db, cache, srv}, nil
-}
-
-// providerChannels maps each provider name to the channel it serves.
-func providerChannels(cfg *config.Config) map[string]domain.Channel {
-	out := map[string]domain.Channel{}
-	for ch, cc := range cfg.Channels {
-		for _, p := range cc.Providers {
-			out[p.Name] = ch
-		}
-	}
-	return out
 }
 
 // policy turns the configured limits into the rules the domain validates against.

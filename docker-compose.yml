@@ -17,6 +17,15 @@ x-app: &app
     redis:
       condition: service_healthy
 
+x-webhook-secrets: &webhook-secrets
+  # Local development only. api verifies with them and simprovider signs with them.
+  WEBHOOK_SECRET_EMAIL_A: dev-webhook-secret-email-a
+  WEBHOOK_SECRET_EMAIL_B: dev-webhook-secret-email-b
+  WEBHOOK_SECRET_SMS_A: dev-webhook-secret-sms-a
+  WEBHOOK_SECRET_SMS_B: dev-webhook-secret-sms-b
+  WEBHOOK_SECRET_WHATSAPP_A: dev-webhook-secret-whatsapp-a
+  WEBHOOK_SECRET_WHATSAPP_B: dev-webhook-secret-whatsapp-b
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -70,7 +79,7 @@ services:
     <<: *app
     build: {context: ., dockerfile: infra/Dockerfile, args: {SERVICE: api}}
     environment:
-      <<: *app-env
+      <<: [*app-env, *webhook-secrets]
       API_KEY: dev-api-key # local development only
     ports: ["8080:8080"]
 
@@ -85,6 +94,7 @@ services:
   simprovider:
     build: {context: ., dockerfile: infra/Dockerfile, args: {SERVICE: simprovider}}
     environment:
+      <<: *webhook-secrets
       CONFIG_PATH: /etc/notifier/config.yaml
       HTTP_ADDR: ":8081"
     volumes:

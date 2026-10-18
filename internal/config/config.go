@@ -513,6 +513,17 @@ func (c *Config) ProvidersByName() map[string]Provider {
 	return out
 }
 
+// ProviderChannels maps each provider name to the channel it serves.
+func (c *Config) ProviderChannels() map[string]domain.Channel {
+	out := map[string]domain.Channel{}
+	for ch, cc := range c.Channels {
+		for _, p := range cc.Providers {
+			out[p.Name] = ch
+		}
+	}
+	return out
+}
+
 // ProviderBackoffs maps each provider name to its retry backoff policy.
 func (c *Config) ProviderBackoffs() map[string]domain.Backoff {
 	out := map[string]domain.Backoff{}

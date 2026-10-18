@@ -64,3 +64,13 @@ Phases 1-3 get every accepted delivery onto the queue and into a claimed inbox r
 - `failure_reason` is a closed enum.
 
 - Phase 4/5 boundary (confirmed): single attempt; provider failures and timeouts are parked in `WAITING_RETRY` with `failure_class`; no scan, retry or failover until Phase 5.
+
+## Deviations made while building (also recorded in the decision log)
+- `Provider.Send` returns only an `error`; the empty `SendResult` was dropped.
+- The simulator serves every provider from one service, so its routes carry the provider name: `POST /providers/{name}/send` and `GET /providers/{name}/status/{id}`.
+- `PENDING` may move to `UNRESOLVED`, because a timeout on the last provider never reaches `ACCEPTED`.
+- `WebhookStore.Apply` replaces `WebhookEventStore.Record` plus `DeliveryStore.Transition`: the event and the move share one transaction.
+- `Park` adds one to `retries`, and the backoff exponent is the retries already spent.
+- `Claim` returns the claim count (the fencing token) and the retries used.
+- A webhook applies only to a delivery on the channel its provider serves.
+- The simulator sends the webhook of a slow or timed-out call after the response it delays.

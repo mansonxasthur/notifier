@@ -301,3 +301,20 @@ func TestSecretIsRedacted(t *testing.T) {
 		}
 	}
 }
+
+// The compose file is a second place that names each provider's webhook secret variable.
+// A provider added to config.yaml without a matching entry there would crash the api and
+// simprovider on `make up`.
+func TestComposeSetsEveryWebhookSecret(t *testing.T) {
+	compose, err := os.ReadFile("../../docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cc := range loadShipped(t).Channels {
+		for _, p := range cc.Providers {
+			if !strings.Contains(string(compose), "  "+p.Webhook.SecretEnv+":") {
+				t.Errorf("docker-compose.yml does not set %s (webhook secret of %s)", p.Webhook.SecretEnv, p.Name)
+			}
+		}
+	}
+}

@@ -1,6 +1,8 @@
 # Defaults for every entry point. Connection strings come from the environment
 # (DATABASE_URL, AMQP_URL, REDIS_URL); HTTP_ADDR overrides http.addr.
-# The api entry point also requires API_KEY, the key producers send in X-API-KEY.
+# The api entry point also requires API_KEY, the key producers send in X-API-KEY, and the
+# webhook secret of every provider (the variable named by its webhook.secret_env). The
+# simprovider entry point requires the same secrets, because it signs with them.
 
 shutdown_timeout: 20s
 
