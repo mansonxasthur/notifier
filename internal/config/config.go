@@ -317,3 +317,8 @@ func (r Relay) validate() []error {
 	}
 	return errs
 }
+
+// Policy converts the configured backoff to the domain type.
+func (b Backoff) Policy() domain.Backoff {
+	return domain.Backoff{Initial: b.Initial, Max: b.Max, Multiplier: b.Multiplier, Jitter: b.Jitter}
+}
