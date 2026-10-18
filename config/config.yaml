@@ -80,8 +80,12 @@ channels:
 
 relay:
   poll_interval: 100ms
-  batch_size: 500
+  batch_size: 2000
+  # Claim-and-publish loops per relay process; SKIP LOCKED keeps them off each other's rows.
+  workers: 8
   max_attempts: 10
+  # How long to wait for the broker to confirm a published batch.
+  confirm_timeout: 5s
   backoff: {initial: 1s, max: 1m, multiplier: 2.0, jitter: 0.2}
   janitor:
     interval: 5s
@@ -93,3 +97,5 @@ sender:
   # How often the sender scans for retries that have become due.
   poll_interval: 200ms
   max_claims: 20
+  # Unacknowledged messages a sender holds per queue.
+  prefetch: 50

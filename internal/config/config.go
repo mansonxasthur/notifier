@@ -81,9 +81,13 @@ type Backoff struct {
 type Relay struct {
 	PollInterval time.Duration `yaml:"poll_interval"`
 	BatchSize    int           `yaml:"batch_size"`
-	MaxAttempts  int           `yaml:"max_attempts"`
-	Backoff      Backoff       `yaml:"backoff"`
-	Janitor      Janitor       `yaml:"janitor"`
+	// Workers is how many claim-and-publish loops one relay runs.
+	Workers     int `yaml:"workers"`
+	MaxAttempts int `yaml:"max_attempts"`
+	// ConfirmTimeout bounds the wait for the broker to confirm a published batch.
+	ConfirmTimeout time.Duration `yaml:"confirm_timeout"`
+	Backoff        Backoff       `yaml:"backoff"`
+	Janitor        Janitor       `yaml:"janitor"`
 }
 
 type Janitor struct {
@@ -96,6 +100,8 @@ type Janitor struct {
 type Sender struct {
 	PollInterval time.Duration `yaml:"poll_interval"`
 	MaxClaims    int           `yaml:"max_claims"`
+	// Prefetch is how many unacknowledged messages a sender holds per queue.
+	Prefetch int `yaml:"prefetch"`
 }
 
 // Load reads the YAML file at path, applies environment overrides, and validates the result.
@@ -214,6 +220,9 @@ func (c *Config) Validate() error {
 	if c.Sender.MaxClaims <= 0 {
 		bad("sender.max_claims must be positive")
 	}
+	if c.Sender.Prefetch <= 0 {
+		bad("sender.prefetch must be positive")
+	}
 
 	return errors.Join(errs...)
 }
@@ -292,8 +301,14 @@ func (r Relay) validate() []error {
 	if r.BatchSize <= 0 {
 		bad("relay.batch_size must be positive")
 	}
+	if r.Workers <= 0 {
+		bad("relay.workers must be positive")
+	}
 	if r.MaxAttempts <= 0 {
 		bad("relay.max_attempts must be positive")
+	}
+	if r.ConfirmTimeout <= 0 {
+		bad("relay.confirm_timeout must be positive")
 	}
 	errs = append(errs, r.Backoff.validate("relay.backoff")...)
 	if r.Janitor.Interval <= 0 {
@@ -306,4 +321,22 @@ func (r Relay) validate() []error {
 		bad("relay.janitor.inbox_stuck_margin must be positive")
 	}
 	return errs
+}
+
+// Policy converts the configured backoff to the domain type.
+func (b Backoff) Policy() domain.Backoff {
+	return domain.Backoff{Initial: b.Initial, Max: b.Max, Multiplier: b.Multiplier, Jitter: b.Jitter}
+}
+
+// PrimaryProviders maps each channel to the name of its primary provider.
+func (c *Config) PrimaryProviders() map[domain.Channel]string {
+	out := make(map[domain.Channel]string, len(c.Channels))
+	for ch, cc := range c.Channels {
+		for _, p := range cc.Providers {
+			if p.Primary {
+				out[ch] = p.Name
+			}
+		}
+	}
+	return out
 }

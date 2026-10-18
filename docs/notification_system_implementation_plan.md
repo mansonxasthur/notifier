@@ -82,15 +82,15 @@ Done when a 1,000-recipient batch containing one duplicate and one invalid row r
 
 Goal: the relay and the janitor get every accepted delivery onto the queue at least once, and a crashed relay or sender loses nothing.
 
-- [ ] `Publisher` and `Consumer` ports, with a RabbitMQ adapter and an in-memory adapter used only in tests
-- [ ] One durable queue per channel (email, SMS, WhatsApp), with persistent messages that carry only the `delivery_id`
-- [ ] Relay claims batches with `FOR UPDATE SKIP LOCKED`, taking only rows whose `next_attempt_at` is empty or has passed, sets `PROCESSING`, adds one to `retries`, and sets `last_try`, with pickup delay kept small by a short poll interval
-- [ ] Publisher confirms: mark `PUBLISHED` only after the broker acknowledges, and return a failed publish to `NEW` with a later `next_attempt_at`
-- [ ] Fencing token on relay claims (the outbox `retries` counter) and an attempt cap with a dead state that records a `failure_reason`
-- [ ] Sender intake: insert or find the inbox row, claim it with a conditional update to `PROCESSING` (adding one to `claim_count`), and acknowledge the message only after that write
-- [ ] Janitor sweeps inside the relay: reclaim outbox rows stuck in `PROCESSING`, and reclaim inbox rows stuck in `PROCESSING` (using that provider's timeout plus a margin as the threshold, with the provider check before any resend); the reconciler for `ACCEPTED` deliveries without a receipt is an enhancement
-- [ ] One outbox row per recipient per channel, matching its delivery row
-- [ ] Tests against real Postgres and RabbitMQ: two relays never take the same row, a killed relay's rows are recovered, a restarted broker loses nothing, and a redelivered message is handled once
+- [x] `Publisher` and `Consumer` ports, with a RabbitMQ adapter and an in-memory adapter used only in tests
+- [x] One durable queue per channel (email, SMS, WhatsApp), with persistent messages that carry only the `delivery_id`
+- [x] Relay claims batches with `FOR UPDATE SKIP LOCKED`, taking only rows whose `next_attempt_at` is empty or has passed, sets `PROCESSING`, adds one to `retries`, and sets `last_try`, with pickup delay kept small by a short poll interval
+- [x] Publisher confirms: mark `PUBLISHED` only after the broker acknowledges, and return a failed publish to `NEW` with a later `next_attempt_at`
+- [x] Fencing token on relay claims (the outbox `retries` counter) and an attempt cap with a dead state that records a `failure_reason`
+- [x] Sender intake: insert or find the inbox row, claim it with a conditional update to `PROCESSING` (adding one to `claim_count`), and acknowledge the message only after that write
+- [x] Janitor sweeps inside the relay: reclaim outbox rows stuck in `PROCESSING`, and reclaim inbox rows stuck in `PROCESSING` (using that provider's timeout plus a margin as the threshold, with the provider check before any resend); the reconciler for `ACCEPTED` deliveries without a receipt is an enhancement
+- [x] One outbox row per recipient per channel, matching its delivery row
+- [x] Tests against real Postgres and RabbitMQ: two relays never take the same row, a killed relay's rows are recovered, a restarted broker loses nothing, and a redelivered message is handled once
 
 Done when killing a relay mid-batch, or restarting the broker, ends with every delivery processed and nothing stuck.
 

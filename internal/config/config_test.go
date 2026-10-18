@@ -182,10 +182,13 @@ func TestValidateRejects(t *testing.T) {
 		{"backoff multiplier below one", func(c *Config) { c.Relay.Backoff.Multiplier = 0.5 }, "multiplier"},
 		{"relay poll zero", func(c *Config) { c.Relay.PollInterval = 0 }, "relay.poll_interval"},
 		{"relay batch zero", func(c *Config) { c.Relay.BatchSize = 0 }, "relay.batch_size"},
+		{"relay workers zero", func(c *Config) { c.Relay.Workers = 0 }, "relay.workers"},
 		{"relay attempts zero", func(c *Config) { c.Relay.MaxAttempts = 0 }, "relay.max_attempts"},
 		{"janitor interval zero", func(c *Config) { c.Relay.Janitor.Interval = 0 }, "janitor.interval"},
 		{"janitor outbox threshold zero", func(c *Config) { c.Relay.Janitor.OutboxStuckAfter = 0 }, "outbox_stuck_after"},
 		{"janitor margin zero", func(c *Config) { c.Relay.Janitor.InboxStuckMargin = 0 }, "inbox_stuck_margin"},
+		{"relay confirm timeout zero", func(c *Config) { c.Relay.ConfirmTimeout = 0 }, "relay.confirm_timeout"},
+		{"sender prefetch zero", func(c *Config) { c.Sender.Prefetch = 0 }, "sender.prefetch"},
 		{"sender poll zero", func(c *Config) { c.Sender.PollInterval = 0 }, "sender.poll_interval"},
 		{"sender claims zero", func(c *Config) { c.Sender.MaxClaims = 0 }, "sender.max_claims"},
 	}

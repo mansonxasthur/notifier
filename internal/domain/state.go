@@ -39,3 +39,40 @@ const (
 	FailureProvider FailureClass = "provider"
 	FailureTimeout  FailureClass = "timeout"
 )
+
+// FailureReason is the stored reason a row or delivery ended in a terminal failure.
+type FailureReason string
+
+const (
+	ReasonMaxAttemptsExceeded FailureReason = "MAX_ATTEMPTS_EXCEEDED"
+	ReasonMaxClaimsExceeded   FailureReason = "MAX_CLAIMS_EXCEEDED"
+	ReasonPublishFailed       FailureReason = "PUBLISH_FAILED"
+)
+
+// OutboxClaim is an outbox row a relay holds. Retries is the fencing token: the claim is
+// only valid while the row still carries this value.
+type OutboxClaim struct {
+	DeliveryID int64
+	Channel    Channel
+	Retries    int
+}
+
+// InboxClaimResult says what a sender learned when it tried to claim a delivery.
+type InboxClaimResult int
+
+const (
+	// InboxClaimWon: this sender owns the send.
+	InboxClaimWon InboxClaimResult = iota
+	// InboxClaimDuplicate: another sender owns it, or it is already done.
+	InboxClaimDuplicate
+	// InboxClaimDead: the delivery exceeded its claim cap and was failed.
+	InboxClaimDead
+)
+
+// StuckInbox is an inbox row left in PROCESSING past its threshold. ClaimCount is the
+// fencing token for the sweep's update.
+type StuckInbox struct {
+	DeliveryID int64
+	Provider   string
+	ClaimCount int
+}
