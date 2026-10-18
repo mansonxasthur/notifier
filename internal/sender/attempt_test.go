@@ -16,22 +16,63 @@ import (
 	"github.com/mansonxasthur/notifier/internal/ports"
 )
 
-var quiet = slog.New(slog.DiscardHandler)
-
 // fakeProvider records its calls and answers with err.
 type fakeProvider struct {
+	name  string
 	mu    sync.Mutex
 	calls []ports.SendRequest
 	err   error
 }
 
-func (f *fakeProvider) Name() string { return "sms-a" }
+func (f *fakeProvider) Name() string { return f.name }
 
 func (f *fakeProvider) Send(_ context.Context, r ports.SendRequest) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, r)
 	return f.err
+}
+
+// fakeChecker answers every status lookup with the same result.
+type fakeChecker struct {
+	mu    sync.Mutex
+	calls []string
+	res   ports.CheckResult
+	err   error
+}
+
+func (f *fakeChecker) Check(_ context.Context, provider string, _ int64) (ports.CheckResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, provider)
+	return f.res, f.err
+}
+
+// recordingHandler keeps the level of every log record.
+type recordingHandler struct {
+	mu     sync.Mutex
+	levels []slog.Level
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.levels = append(h.levels, r.Level)
+	return nil
+}
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *recordingHandler) count(l slog.Level) (n int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, got := range h.levels {
+		if got == l {
+			n++
+		}
+	}
+	return n
 }
 
 type providers map[string]ports.Provider
@@ -44,7 +85,12 @@ type fixture struct {
 	id      int64
 	claim   Claimed
 	attempt *Attempt
-	prov    *fakeProvider
+	prov    *fakeProvider // sms-a, the primary
+	provB   *fakeProvider // sms-b, the fallback
+	checker *fakeChecker
+	breaker *Breakers
+	logs    *recordingHandler
+	clock   *clock
 	now     time.Time
 }
 
@@ -81,14 +127,23 @@ func newFixture(t *testing.T, sendErr error) *fixture {
 		t.Fatalf("claim = %+v, %v", c, err)
 	}
 
-	prov := &fakeProvider{err: sendErr}
+	prov, provB := &fakeProvider{name: "sms-a", err: sendErr}, &fakeProvider{name: "sms-b"}
 	f := &fixture{
-		db: db, inbox: inbox, id: id, prov: prov,
-		claim: Claimed{DeliveryID: id, Provider: "sms-a", ClaimCount: c.ClaimCount},
-		now:   time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC),
+		db: db, inbox: inbox, id: id, prov: prov, provB: provB,
+		checker: &fakeChecker{res: ports.CheckNotFound},
+		logs:    &recordingHandler{},
+		claim:   Claimed{DeliveryID: id, Provider: "sms-a", ClaimCount: c.ClaimCount},
+		now:     time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC),
 	}
-	backoff := map[string]domain.Backoff{"sms-a": {Initial: 2 * time.Second, Max: time.Minute, Multiplier: 2, Jitter: 0.2}}
-	f.attempt = NewAttempt(postgres.NewDeliveryStore(db), inbox, providers{"sms-a": prov}, backoff, quiet)
+	f.clock = &clock{t: f.now}
+	f.breaker = NewBreakers(domain.BreakerPolicy{FailureThreshold: 3, OpenFor: 10 * time.Second}, f.clock.now)
+	retry := domain.RetryPolicy{MaxRetries: 1, Backoff: domain.Backoff{Initial: 2 * time.Second, Max: time.Minute, Multiplier: 2, Jitter: 0.2}}
+	routing := Routing{
+		Order:    map[domain.Channel][]string{domain.ChannelSMS: {"sms-a", "sms-b"}},
+		Policies: map[string]domain.RetryPolicy{"sms-a": retry, "sms-b": retry},
+	}
+	f.attempt = NewAttempt(postgres.NewDeliveryStore(db), inbox, providers{"sms-a": prov, "sms-b": provB},
+		f.checker, f.breaker, routing, slog.New(f.logs))
 	f.attempt.now = func() time.Time { return f.now }
 	f.attempt.jitter = func() float64 { return 0.5 }
 	return f
@@ -246,6 +301,9 @@ func TestAttemptUnknownDelivery(t *testing.T) {
 func TestAttemptBackoffGrowsWithRetriesNotClaims(t *testing.T) {
 	f := newFixture(t, &ports.SendError{Class: domain.FailureProvider, Err: errors.New("boom")})
 	f.claim.Retries = 2 // two retries already used; claim_count is whatever the janitor made it
+	pol := f.attempt.routing.Policies["sms-a"]
+	pol.MaxRetries = 5
+	f.attempt.routing.Policies["sms-a"] = pol
 	if err := f.attempt.Send(context.Background(), f.claim); err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +320,7 @@ func TestAttemptBackoffGrowsWithRetriesNotClaims(t *testing.T) {
 func TestAttemptRecordsTheOutcomeAfterShutdownStarts(t *testing.T) {
 	f := newFixture(t, nil)
 	ctx, cancel := context.WithCancel(context.Background())
-	f.attempt.providers = providers{"sms-a": cancelOnSend{fakeProvider: f.prov, cancel: cancel}}
+	f.attempt.providers = providers{"sms-a": cancelOnSend{fakeProvider: f.prov, cancel: cancel}, "sms-b": f.provB}
 
 	if err := f.attempt.Send(ctx, f.claim); err != nil {
 		t.Fatalf("Send = %v: the accepted message must still be recorded", err)
@@ -287,9 +345,9 @@ func (c cancelOnSend) Send(ctx context.Context, r ports.SendRequest) error {
 
 func TestAttemptRefusesAProviderWithoutBackoff(t *testing.T) {
 	f := newFixture(t, nil)
-	f.attempt.backoff = nil
+	f.attempt.routing.Policies = nil
 	if err := f.attempt.Send(context.Background(), f.claim); err == nil {
-		t.Error("want an error when the provider has no backoff policy")
+		t.Error("want an error when the provider has no retry policy")
 	}
 	if len(f.prov.calls) != 0 {
 		t.Error("the provider must not be called without a retry policy")

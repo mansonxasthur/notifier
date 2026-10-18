@@ -549,12 +549,24 @@ func (c *Config) ProviderChannels() map[string]domain.Channel {
 	return out
 }
 
-// ProviderBackoffs maps each provider name to its retry backoff policy.
-func (c *Config) ProviderBackoffs() map[string]domain.Backoff {
-	out := map[string]domain.Backoff{}
+// ProviderRetryPolicies maps each provider name to its retry policy.
+func (c *Config) ProviderRetryPolicies() map[string]domain.RetryPolicy {
+	out := map[string]domain.RetryPolicy{}
 	for _, cc := range c.Channels {
 		for _, p := range cc.Providers {
-			out[p.Name] = p.Backoff.Policy()
+			out[p.Name] = domain.RetryPolicy{MaxRetries: p.MaxRetries, Backoff: p.Backoff.Policy()}
+		}
+	}
+	return out
+}
+
+// ProviderOrder maps each channel to its provider names in try order. Validation requires the
+// primary to be listed first, so the list order is the order the sender tries them in.
+func (c *Config) ProviderOrder() map[domain.Channel][]string {
+	out := make(map[domain.Channel][]string, len(c.Channels))
+	for ch, cc := range c.Channels {
+		for _, p := range cc.Providers {
+			out[ch] = append(out[ch], p.Name)
 		}
 	}
 	return out

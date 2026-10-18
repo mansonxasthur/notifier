@@ -4,6 +4,7 @@ package main
 import (
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/mansonxasthur/notifier/internal/adapters/postgres"
 	"github.com/mansonxasthur/notifier/internal/adapters/provider"
@@ -24,7 +25,10 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	mq := rabbitmq.New(cfg.AMQPURL)
 
 	inbox := postgres.NewInboxStore(db)
-	attempt := sender.NewAttempt(postgres.NewDeliveryStore(db), inbox, provider.NewRegistry(cfg, nil), cfg.ProviderBackoffs(), log)
+	providers := provider.NewRegistry(cfg, nil)
+	attempt := sender.NewAttempt(postgres.NewDeliveryStore(db), inbox, providers, providers,
+		sender.NewBreakers(cfg.Sender.Breaker.Policy(), time.Now),
+		sender.Routing{Order: cfg.ProviderOrder(), Policies: cfg.ProviderRetryPolicies()}, log)
 	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.MaxClaims, attempt.Send, log)
 	s := sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, log), intake)
 

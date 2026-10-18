@@ -158,7 +158,10 @@ func newStack(t *testing.T) *stack {
 		relay.Config{PollInterval: 10 * time.Millisecond, BatchSize: 100, Workers: 2, MaxAttempts: 10, Backoff: backoff}, quiet))
 
 	inbox := postgres.NewInboxStore(db)
-	attempt := sender.NewAttempt(postgres.NewDeliveryStore(db), inbox, provider.NewRegistry(cfg, nil), cfg.ProviderBackoffs(), quiet)
+	providers := provider.NewRegistry(cfg, nil)
+	attempt := sender.NewAttempt(postgres.NewDeliveryStore(db), inbox, providers, providers,
+		sender.NewBreakers(cfg.Sender.Breaker.Policy(), time.Now),
+		sender.Routing{Order: cfg.ProviderOrder(), Policies: cfg.ProviderRetryPolicies()}, quiet)
 	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.MaxClaims, attempt.Send, quiet)
 	start(t, sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, quiet), intake))
 
@@ -234,8 +237,8 @@ func (s *stack) rows(t *testing.T) map[int64]row {
 	return out
 }
 
-// expected is the final state each scenario must lead to in Phase 4. Phase 5 adds the retry
-// scan and failover, which move the parked rows on; these expectations change with it.
+// expected is the final state each scenario must lead to. The retry scan, which moves the
+// parked rows on, comes later in Phase 5; the fail_transient expectation changes with it.
 var expected = map[domain.Scenario]row{
 	domain.ScenarioSucceed:       {state: "DELIVERED", inbox: "DONE"},
 	domain.ScenarioSlow:          {state: "DELIVERED", inbox: "DONE"},
@@ -243,8 +246,8 @@ var expected = map[domain.Scenario]row{
 	domain.ScenarioFailPermanent: {state: "FAILED", reason: "PROVIDER_REJECTED", inbox: "DEAD", class: "message"},
 	// A transient failure is parked for the retry scan, which Phase 5 adds.
 	domain.ScenarioFailTransient: {state: "PENDING", inbox: "WAITING_RETRY", class: "provider"},
-	// The call timed out and was parked, then the provider's own webhook finished it.
-	domain.ScenarioTimeout: {state: "DELIVERED", inbox: "WAITING_RETRY", class: "timeout"},
+	// The call timed out, the lookup found the message, and the provider's own webhook finished it.
+	domain.ScenarioTimeout: {state: "DELIVERED", inbox: "DONE"},
 }
 
 // A message flows from the request to its final state through the simulated provider, in

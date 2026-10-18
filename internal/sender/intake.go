@@ -33,7 +33,7 @@ type Intake struct {
 	log       *slog.Logger
 }
 
-// NewIntake claims with each channel's primary provider and at most maxClaims claims per delivery.
+// NewIntake claims a new delivery on its channel's primary provider and at most maxClaims claims per delivery.
 func NewIntake(inbox ports.InboxStore, primary map[domain.Channel]string, maxClaims int, send Send, log *slog.Logger) *Intake {
 	return &Intake{inbox: inbox, primary: primary, maxClaims: maxClaims, send: send, log: log}
 }
@@ -55,9 +55,10 @@ func (i *Intake) Handler(ch domain.Channel) (ports.Handler, error) {
 		case domain.InboxClaimWon:
 			// A failed send is not returned: requeueing the message would only produce a
 			// duplicate that is dropped. The row stays PROCESSING and the janitor recovers it.
-			c := Claimed{DeliveryID: deliveryID, Provider: provider, ClaimCount: claim.ClaimCount, Retries: claim.Retries}
+			// The row's own provider, not the primary: a failover moves it.
+			c := Claimed{DeliveryID: deliveryID, Provider: claim.Provider, ClaimCount: claim.ClaimCount, Retries: claim.Retries}
 			if err := i.send(ctx, c); err != nil {
-				i.log.Error("send failed", "delivery_id", deliveryID, "provider", provider, "error", err)
+				i.log.Error("send failed", "delivery_id", deliveryID, "provider", claim.Provider, "error", err)
 			}
 		case domain.InboxClaimDead:
 			i.log.Error("delivery exceeded its claim cap", "delivery_id", deliveryID, "reason", domain.ReasonMaxClaimsExceeded)
