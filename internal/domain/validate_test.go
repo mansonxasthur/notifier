@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -73,6 +74,10 @@ func TestValidateRecipientReasons(t *testing.T) {
 		want    RejectReason
 	}{
 		{"empty id", nil, rec("", map[Channel]string{ChannelSMS: "+201000000000"}), ReasonInvalidRecipient},
+		{"id over the limit", nil, rec(strings.Repeat("a", MaxRecipientIDLen+1), map[Channel]string{ChannelSMS: "+201000000000"}), ReasonInvalidRecipient},
+		{"id with NUL", nil, rec("u\x00", map[Channel]string{ChannelSMS: "+201000000000"}), ReasonInvalidRecipient},
+		{"sms text with NUL", map[Channel]Content{ChannelSMS: {Text: "a\x00b"}},
+			rec("u", map[Channel]string{ChannelSMS: "+201000000000"}), ReasonInvalidContent},
 		{"no channels", nil, rec("u", nil), ReasonInvalidRecipient},
 		{"unknown channel", nil, rec("u", map[Channel]string{"push": "x"}), ReasonUnknownChannel},
 		{"no content for channel", map[Channel]Content{ChannelEmail: goodContent()[ChannelEmail]},
@@ -226,5 +231,22 @@ func TestValidateStoresOnlyContentOfUsedChannels(t *testing.T) {
 	}
 	if len(v.Notification.Content) != 1 || v.Notification.Content[ChannelSMS].Text == "" {
 		t.Fatalf("content = %+v, want only sms", v.Notification.Content)
+	}
+}
+
+func TestValidateRecipientIDAtLimitIsAccepted(t *testing.T) {
+	id := strings.Repeat("a", MaxRecipientIDLen)
+	v, err := request(rec(id, map[Channel]string{ChannelSMS: "+201000000000"})).Validate(policy, now)
+	if err != nil || len(v.Rejected) != 0 || len(v.Notification.Deliveries) != 1 {
+		t.Fatalf("got %+v, %v; want accepted", v, err)
+	}
+}
+
+func TestValidateAllowsLineBreaksInText(t *testing.T) {
+	r := request(rec("u", map[Channel]string{ChannelSMS: "+201000000000"}))
+	r.Content[ChannelSMS] = Content{Text: "line one\nline two\ttabbed"}
+	v, err := r.Validate(policy, now)
+	if err != nil || len(v.Rejected) != 0 {
+		t.Fatalf("got %+v, %v; want accepted", v, err)
 	}
 }

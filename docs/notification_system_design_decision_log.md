@@ -81,7 +81,7 @@ Response to a partly accepted batch:
 | Every recipient rejected | 422 |
 | Database or infrastructure failure, nothing accepted | 5xx, safe to retry with the same key |
 
-Reason codes for a rejected recipient: `INVALID_RECIPIENT` (empty id or no channels), `INVALID_CONTACT` (not an email address or an E.164 number), `MISSING_CONTENT` (a listed channel has no content), `INVALID_CONTENT` (content not in an accepted shape) and `UNKNOWN_CHANNEL`. One bad channel rejects the whole recipient with the first reason found, so a recipient is never half accepted. A recipient repeated inside one payload is not rejected: the first occurrence of each `(recipient_id, channel)` wins and the repeats count under `duplicates`.
+Reason codes for a rejected recipient: `INVALID_RECIPIENT` (empty id, an id over 255 bytes or with a control character, or no channels), `INVALID_CONTACT` (not an email address or an E.164 number), `MISSING_CONTENT` (a listed channel has no content), `INVALID_CONTENT` (content not in an accepted shape, or text with a control character other than a line break or tab) and `UNKNOWN_CHANNEL`. One bad channel rejects the whole recipient with the first reason found, so a recipient is never half accepted. A recipient repeated inside one payload is not rejected: the first occurrence of each `(recipient_id, channel)` wins and the repeats count under `duplicates`.
 
 Some problems reject the request as a whole with 422 and an error code: `INVALID_IDEMPOTENCY_KEY` (not a UUID), `NO_RECIPIENTS`, `UNKNOWN_TYPE` (a type that is not configured) and `EXPIRED_DEADLINE` (`expires_at` is not in the future).
 

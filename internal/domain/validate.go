@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 )
@@ -41,6 +42,9 @@ func hasAccepted(seen map[unit]bool, recipient string) bool {
 	}
 	return false
 }
+
+// MaxRecipientIDLen is the longest recipient_id accepted, in bytes.
+const MaxRecipientIDLen = 255
 
 // e164 is a plus sign, a country code that does not start with zero, and up to 15 digits in all.
 var e164 = regexp.MustCompile(`^\+[1-9][0-9]{6,14}$`)
@@ -83,7 +87,7 @@ func (r Request) Validate(p Policy, now time.Time) (Validated, error) {
 		}
 		rows, reason := validateRecipient(rec, r.Content, expiresAt)
 		if reason != "" {
-			if rec.ID != "" && hasAccepted(seen, rec.ID) {
+			if hasAccepted(seen, rec.ID) {
 				// The first occurrence won; this copy is a repeat, not a rejection.
 				out.Duplicates += len(rec.Channels)
 				continue
@@ -109,7 +113,7 @@ func (r Request) Validate(p Policy, now time.Time) (Validated, error) {
 // validateRecipient returns the recipient's deliveries, or the reason to reject all of them.
 // Channels are checked in a stable order so the reason does not depend on map iteration.
 func validateRecipient(rec Recipient, content map[Channel]Content, expiresAt time.Time) ([]Delivery, RejectReason) {
-	if rec.ID == "" || len(rec.Channels) == 0 {
+	if rec.ID == "" || len(rec.ID) > MaxRecipientIDLen || hasControl(rec.ID) || len(rec.Channels) == 0 {
 		return nil, ReasonInvalidRecipient
 	}
 	for ch := range rec.Channels {
@@ -140,6 +144,9 @@ func validateRecipient(rec Recipient, content map[Channel]Content, expiresAt tim
 
 // validFor reports whether the content has an accepted shape for the channel.
 func (c Content) validFor(ch Channel) bool {
+	if c.hasControl() {
+		return false
+	}
 	switch ch {
 	case ChannelSMS:
 		return c.Text != "" && c.Subject == "" && c.Body == "" && c.TemplateID == "" && len(c.Variables) == 0
@@ -154,6 +161,29 @@ func (c Content) validFor(ch Channel) bool {
 			return false
 		}
 		return ch == ChannelWhatsApp && c.Subject == "" || ch == ChannelEmail && c.Subject != ""
+	}
+	return false
+}
+
+// hasControl reports whether s has a control character. Postgres refuses NUL in text and
+// jsonb, and none of the other control characters belong in an identifier.
+func hasControl(s string) bool {
+	return strings.ContainsFunc(s, unicode.IsControl)
+}
+
+// hasControl reports whether any text in the content has a control character. Line breaks
+// and tabs are fine in message text, so only the rest of the C0 range and NUL are refused.
+func (c Content) hasControl() bool {
+	bad := func(s string) bool {
+		return strings.ContainsFunc(s, func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' })
+	}
+	if bad(c.Text) || bad(c.Subject) || bad(c.Body) || bad(c.TemplateID) {
+		return true
+	}
+	for k, v := range c.Variables {
+		if bad(k) || bad(v) {
+			return true
+		}
 	}
 	return false
 }
