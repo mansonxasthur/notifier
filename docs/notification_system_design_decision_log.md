@@ -150,6 +150,16 @@ RabbitMQ, with one durable queue per channel, carries the work. The relay publis
 - **Attempt cap.** A row that keeps failing moves to a dead state for inspection instead of cycling forever, and the failure reason is saved on the row.
 - **Alternative considered:** fold the lease into the claim query so every relay reclaims stale rows. A separate janitor sweep was chosen instead.
 
+Details settled for Phase 3:
+
+- **Queue names and message.** The default exchange is used, and each queue is named after its channel only (`email`, `sms`, `whatsapp`). The message body holds only the `delivery_id`, as decimal text.
+- **`next_attempt_at`.** It is empty by default, which means due now. It is set only when a retry is scheduled (a failed publish or a janitor reclaim) and is never carried in the message.
+- **Release delay.** `delay = min(max, initial * multiplier^(retries-1))`, jittered by plus or minus the configured `jitter` fraction, from the relay's `backoff` settings. One helper serves both the failed-publish release and the janitor reclaim.
+- **Attempt cap.** A claim that would take `retries` above `relay.max_attempts` ends the row `DEAD` with the reason `MAX_ATTEMPTS_EXCEEDED`. A janitor reclaim counts against the cap, because it follows a claim.
+- **Sender claim.** The first delivery of a message inserts the inbox row directly as `PROCESSING` with `claim_count` 1. If the row exists, only a row in `WAITING_RETRY` can be claimed again (conditional on the `claim_count` read). Any other state means a duplicate message, which is acknowledged and dropped. A `claim_count` above `sender.max_claims` ends the inbox row `DEAD` and the delivery `FAILED` with the reason `MAX_CLAIMS_EXCEEDED`.
+- **Provider check before Phase 4.** The inbox sweep calls a `ProviderChecker` port. Until providers exist its adapter answers "unknown", so a stuck row goes back to `WAITING_RETRY`.
+- **Broker restarts.** The connection component reconnects on its own and re-declares the queues, so neither the relay nor the sender needs a restart after a broker restart.
+
 The relay and the sender are at-least-once. A crash between publishing and marking `PUBLISHED` causes a republish, and a crash between the provider accepting a message and the sender recording it can cause a resend. That is why the inbox makes redelivery harmless and why recovery checks the provider by `delivery_id` first.
 
 The timeout trades against the 5 second target: a relay or sender crash costs at least the timeout for the affected rows. This is accepted because crashes are rare, and the timeout must exceed the worst-case publish or provider call.

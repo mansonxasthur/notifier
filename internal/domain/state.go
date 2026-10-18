@@ -39,3 +39,12 @@ const (
 	FailureProvider FailureClass = "provider"
 	FailureTimeout  FailureClass = "timeout"
 )
+
+// FailureReason is the stored reason a row or delivery ended in a terminal failure.
+type FailureReason string
+
+const (
+	ReasonMaxAttemptsExceeded FailureReason = "MAX_ATTEMPTS_EXCEEDED"
+	ReasonMaxClaimsExceeded   FailureReason = "MAX_CLAIMS_EXCEEDED"
+	ReasonPublishFailed       FailureReason = "PUBLISH_FAILED"
+)

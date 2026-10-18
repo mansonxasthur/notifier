@@ -82,8 +82,10 @@ type Relay struct {
 	PollInterval time.Duration `yaml:"poll_interval"`
 	BatchSize    int           `yaml:"batch_size"`
 	MaxAttempts  int           `yaml:"max_attempts"`
-	Backoff      Backoff       `yaml:"backoff"`
-	Janitor      Janitor       `yaml:"janitor"`
+	// ConfirmTimeout bounds the wait for the broker to confirm a published batch.
+	ConfirmTimeout time.Duration `yaml:"confirm_timeout"`
+	Backoff        Backoff       `yaml:"backoff"`
+	Janitor        Janitor       `yaml:"janitor"`
 }
 
 type Janitor struct {
@@ -96,6 +98,8 @@ type Janitor struct {
 type Sender struct {
 	PollInterval time.Duration `yaml:"poll_interval"`
 	MaxClaims    int           `yaml:"max_claims"`
+	// Prefetch is how many unacknowledged messages a sender holds per queue.
+	Prefetch int `yaml:"prefetch"`
 }
 
 // Load reads the YAML file at path, applies environment overrides, and validates the result.
@@ -214,6 +218,9 @@ func (c *Config) Validate() error {
 	if c.Sender.MaxClaims <= 0 {
 		bad("sender.max_claims must be positive")
 	}
+	if c.Sender.Prefetch <= 0 {
+		bad("sender.prefetch must be positive")
+	}
 
 	return errors.Join(errs...)
 }
@@ -294,6 +301,9 @@ func (r Relay) validate() []error {
 	}
 	if r.MaxAttempts <= 0 {
 		bad("relay.max_attempts must be positive")
+	}
+	if r.ConfirmTimeout <= 0 {
+		bad("relay.confirm_timeout must be positive")
 	}
 	errs = append(errs, r.Backoff.validate("relay.backoff")...)
 	if r.Janitor.Interval <= 0 {
