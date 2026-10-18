@@ -73,3 +73,22 @@ Edit `docs/notification_system_design_decision_log.md`:
 2. A throttled send is deferred via the new `Defer` rather than blocking a worker.
 3. Single global bucket key in Redis; the rate is split by no one, so one producer can use all of it (as the log accepts).
 4. Redis outages fall back per instance, so the effective limit becomes up to instances x rate until Redis recovers.
+
+## Deviations made while building
+
+- **Phase 5 fixes joined this phase** at the engineer's request, after the review of the limiter work flagged them: the janitor's "not found" requeue now spends a retry and follows the sender's path (switch, or `FAILED` on the last provider), `Requeue` is fenced by `retries` as well as the claim, and a breaker ignores a success that arrives while it is open. The decision to fail a delivery at once when the last provider's breaker is open was kept as recorded.
+- **The plan's branch point changed.** Phase 5 was merged while this phase was in progress, so the branch was rebased onto `master`.
+- **A `deferrals` column and migration** (`20261019100000_add_inbox_deferrals`) were not in the plan. Not spending a claim on a deferral could not be done by decrementing `claim_count`, which is the fencing token, so the claim cap counts `claim_count - deferrals`. A check constraint keeps `deferrals` within `claim_count`.
+- **The token comes after the breaker check**, not before as the plan said. A call the breaker refuses then wastes no token, and a refusal gives the half-open probe slot back.
+- **A deferred row is never scheduled past its deadline**; it comes back at the deadline and ends `EXPIRED` on time.
+- **`Fallback` gained a per-call timeout and a cooldown with a single probe**, so a hung Redis costs one slow request per cooldown. The two values are constants in `cmd/api/main.go`, not configuration. A caller whose own context ended is not counted as an outage.
+- **`Client.Scripter()`** (a lazy script runner) and an atomic client pointer were added to `internal/adapters/redis`, because the limiter is built before the lifecycle connects the client.
+- **`BucketPolicy.Validate` also bounds the policy**: a rate that cannot refill one token in a day (`MaxWait`), or a burst that takes longer than a day to refill, is refused.
+- **`RegisterNotifications` refuses a nil limiter**, so intake can never be unlimited by omission.
+- **`newStack` in `internal/e2e` takes config changes**, which the two new end-to-end cases use.
+
+Not built, as planned: a shared (Redis) provider bucket, a reservation scheme for deferred rows, and per-service quotas.
+
+Known limits, recorded in the decision log: the provider bucket is per sender, so N senders can send a provider up to N times its rate; a deep backlog is re-claimed and re-deferred in rounds, so database work grows with the backlog; a Redis timeout after the charge is taken is also charged locally; with N Dispatchers and Redis down the effective global limit is up to N times the rate; a replayed or failed request still costs its tokens.
+
+Review findings left: any success while a breaker is half-open closes it, because telling the probe's success from a stale one would need a ticket per call; a janitor requeue does not check the deadline, which the sender's expiry check catches on the next attempt; the scan starts one goroutine per claimed row, bounded by `scan_batch`.
