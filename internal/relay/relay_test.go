@@ -276,10 +276,12 @@ func maxInt(a, b int) int {
 func startSender(t *testing.T, db *postgres.Pool, mq *rabbitmq.Conn) *countingSend {
 	t.Helper()
 	cs := &countingSend{calls: map[int64]int{}}
-	intake := sender.NewIntake(postgres.NewInboxStore(db), map[domain.Channel]string{
+	inbox := postgres.NewInboxStore(db)
+	intake := sender.NewIntake(inbox, map[domain.Channel]string{
 		domain.ChannelEmail: "email-a", domain.ChannelSMS: "sms-a", domain.ChannelWhatsApp: "whatsapp-a",
 	}, 5, cs.send, quiet)
-	start(t, sender.New(rabbitmq.NewConsumer(mq, 10, quiet), intake))
+	scan := sender.NewScan(inbox, cs.send, time.Hour, 10, 5, quiet) // nothing here parks a row
+	start(t, sender.New(rabbitmq.NewConsumer(mq, 10, quiet), intake, scan))
 	return cs
 }
 

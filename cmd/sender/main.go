@@ -30,7 +30,8 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 		sender.NewBreakers(cfg.Sender.Breaker.Policy(), time.Now),
 		sender.Routing{Order: cfg.ProviderOrder(), Policies: cfg.ProviderRetryPolicies()}, log)
 	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.MaxClaims, attempt.Send, log)
-	s := sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, log), intake)
+	scan := sender.NewScan(inbox, attempt.Send, cfg.Sender.PollInterval, cfg.Sender.ScanBatch, cfg.Sender.MaxClaims, log)
+	s := sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, log), intake, scan)
 
 	return []lifecycle.Component{db, mq, s}, nil
 }
