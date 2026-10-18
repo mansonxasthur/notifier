@@ -37,7 +37,7 @@ func TestSchema(t *testing.T) {
 		rows, err := pool.Query(ctx, `
 			SELECT table_name || '.' || column_name FROM information_schema.columns
 			WHERE table_schema = 'public' AND is_nullable = 'YES'
-			  AND table_name IN ('notifications', 'deliveries', 'outbox', 'inbox')`)
+			  AND table_name IN ('notifications', 'deliveries', 'outbox', 'inbox', 'webhook_events')`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -47,7 +47,7 @@ func TestSchema(t *testing.T) {
 		}
 		sort.Strings(got)
 		want := []string{
-			"inbox.failure_class", "inbox.failure_reason", "inbox.next_attempt_at",
+			"deliveries.failure_reason", "inbox.failure_class", "inbox.failure_reason", "inbox.next_attempt_at",
 			"outbox.failure_reason", "outbox.next_attempt_at",
 		}
 		if strings.Join(got, ",") != strings.Join(want, ",") {

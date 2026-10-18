@@ -35,7 +35,7 @@ WITH due AS (
   FROM due WHERE o.delivery_id = due.delivery_id AND due.retries >= $2
   RETURNING o.delivery_id
 ), failed AS (
-  UPDATE deliveries d SET state = $7, updated_at = now()
+  UPDATE deliveries d SET state = $7, failure_reason = $6, updated_at = now()
   FROM dead WHERE d.id = dead.delivery_id AND d.state = $8
 ), claimed AS (
   UPDATE outbox o SET state = $3, retries = o.retries + 1, last_try = now()

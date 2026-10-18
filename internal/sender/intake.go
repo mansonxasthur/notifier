@@ -45,11 +45,11 @@ func (i *Intake) Handler(ch domain.Channel) (ports.Handler, error) {
 		return nil, fmt.Errorf("no primary provider for channel %s", ch)
 	}
 	return func(ctx context.Context, deliveryID int64) error {
-		res, err := i.inbox.Claim(ctx, deliveryID, provider, i.maxClaims)
+		claim, err := i.inbox.Claim(ctx, deliveryID, provider, i.maxClaims)
 		if err != nil {
 			return fmt.Errorf("claim delivery %d: %w", deliveryID, err)
 		}
-		switch res {
+		switch claim.Result {
 		case domain.InboxClaimWon:
 			// A failed send is not returned: requeueing the message would only produce a
 			// duplicate that is dropped. The row stays PROCESSING and the janitor recovers it.

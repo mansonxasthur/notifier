@@ -26,10 +26,10 @@ func TestInboxClaim(t *testing.T) {
 		db := seed(t, 1)
 		store, id := postgres.NewInboxStore(db), deliveryID(t, db)
 
-		if got, err := store.Claim(ctx, id, "sms-a", 3); err != nil || got != domain.InboxClaimWon {
+		if got, err := store.Claim(ctx, id, "sms-a", 3); err != nil || got.Result != domain.InboxClaimWon {
 			t.Fatalf("first claim = %v, %v, want won", got, err)
 		}
-		if got, err := store.Claim(ctx, id, "sms-a", 3); err != nil || got != domain.InboxClaimDuplicate {
+		if got, err := store.Claim(ctx, id, "sms-a", 3); err != nil || got.Result != domain.InboxClaimDuplicate {
 			t.Fatalf("second claim = %v, %v, want duplicate", got, err)
 		}
 		if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE state = 'PROCESSING' AND claim_count = 1 AND provider = 'sms-a'`); got != 1 {
@@ -54,7 +54,7 @@ func TestInboxClaim(t *testing.T) {
 					return
 				}
 				mu.Lock()
-				results[got]++
+				results[got.Result]++
 				mu.Unlock()
 			}()
 		}
@@ -73,18 +73,18 @@ func TestInboxClaim(t *testing.T) {
 			}
 		}
 
-		if got, err := store.Claim(ctx, id, "sms-a", 2); err != nil || got != domain.InboxClaimWon {
+		if got, err := store.Claim(ctx, id, "sms-a", 2); err != nil || got.Result != domain.InboxClaimWon {
 			t.Fatalf("first claim = %v, %v, want won", got, err)
 		}
 		wait()
-		if got, err := store.Claim(ctx, id, "sms-a", 2); err != nil || got != domain.InboxClaimWon {
+		if got, err := store.Claim(ctx, id, "sms-a", 2); err != nil || got.Result != domain.InboxClaimWon {
 			t.Fatalf("retry claim = %v, %v, want won", got, err)
 		}
 		if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE claim_count = 2`); got != 1 {
 			t.Error("claim_count should be 2 after the retry claim")
 		}
 		wait()
-		if got, err := store.Claim(ctx, id, "sms-a", 2); err != nil || got != domain.InboxClaimDead {
+		if got, err := store.Claim(ctx, id, "sms-a", 2); err != nil || got.Result != domain.InboxClaimDead {
 			t.Fatalf("claim over the cap = %v, %v, want dead", got, err)
 		}
 		if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE state = 'DEAD' AND failure_reason = 'MAX_CLAIMS_EXCEEDED'`); got != 1 {

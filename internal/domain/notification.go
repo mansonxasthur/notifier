@@ -10,6 +10,16 @@ type Delivery struct {
 	ExpiresAt   time.Time
 }
 
+// DeliveryDetail is what a sender needs to make one send attempt.
+type DeliveryDetail struct {
+	ID        int64
+	Channel   Channel
+	Contact   string
+	Content   Content
+	ExpiresAt time.Time
+	State     DeliveryState
+}
+
 // Notification is a validated request, ready to store. The store sets ID.
 type Notification struct {
 	ID             int64
