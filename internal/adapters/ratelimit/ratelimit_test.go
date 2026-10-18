@@ -205,10 +205,50 @@ func TestFallbackAdmitsOneProbeAfterTheCooldown(t *testing.T) {
 	ctx := context.Background()
 	f.Allow(ctx, 1) //nolint:errcheck,gosec // opens the cooldown
 	c.advance(time.Second)
-	if !f.claimShared() {
-		t.Fatal("the first caller after the cooldown was not admitted")
+	if ok, probe := f.claimShared(); !ok || !probe {
+		t.Fatal("the first caller after the cooldown was not admitted as the probe")
 	}
-	if f.claimShared() {
+	if ok, _ := f.claimShared(); ok {
 		t.Fatal("a second caller was admitted while the probe was in flight")
+	}
+}
+
+// slowThenFailing answers its first call only after release is closed, with success, and every
+// later call at once with an error.
+type slowThenFailing struct {
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *slowThenFailing) Allow(context.Context, int) (ports.Decision, error) {
+	s.mu.Lock()
+	s.calls++
+	first := s.calls == 1
+	s.mu.Unlock()
+	if first {
+		close(s.started)
+		<-s.release
+		return ports.Decision{Allowed: true}, nil
+	}
+	return ports.Decision{}, errors.New("down")
+}
+
+func TestFallbackLateSuccessDoesNotEndAnOutage(t *testing.T) {
+	c := newClock()
+	shared := &slowThenFailing{started: make(chan struct{}), release: make(chan struct{})}
+	f, buf := newFallback(shared, NewLocal(domain.BucketPolicy{Rate: 1000, Burst: 1000}, c.now), c)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() { f.Allow(ctx, 1); close(done) }() //nolint:errcheck,gosec // the slow call
+	<-shared.started
+	f.Allow(ctx, 1) //nolint:errcheck,gosec // fails and opens the cooldown
+	close(shared.release)
+	<-done
+
+	if f.skipTill.Load() == 0 || strings.Contains(buf.String(), "recovered") {
+		t.Fatal("a late success from a call that began before the outage ended the cooldown")
 	}
 }

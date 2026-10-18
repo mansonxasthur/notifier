@@ -41,12 +41,15 @@ func NewFallback(shared, local ports.Limiter, timeout, cooldown time.Duration, l
 // Allow answers from the local limiter when the shared one fails. It returns an error only when
 // the caller's own context has ended, which says nothing about the shared limiter.
 func (f *Fallback) Allow(ctx context.Context, n int) (ports.Decision, error) {
-	if f.claimShared() {
+	if ok, probe := f.claimShared(); ok {
 		callCtx, cancel := context.WithTimeout(ctx, f.timeout)
 		d, err := f.shared.Allow(callCtx, n)
 		cancel()
 		if err == nil {
-			f.recovered()
+			// Only the probe ends an outage: a slow call that began before it says nothing now.
+			if probe {
+				f.recovered()
+			}
 			return d, nil
 		}
 		if ctx.Err() != nil {
@@ -58,14 +61,17 @@ func (f *Fallback) Allow(ctx context.Context, n int) (ports.Decision, error) {
 }
 
 // claimShared reports whether this caller should try the shared limiter: always while it is
-// healthy, and for exactly one caller once the cooldown has passed.
-func (f *Fallback) claimShared() bool {
+// healthy, and for exactly one caller, the probe, once the cooldown has passed.
+func (f *Fallback) claimShared() (ok, probe bool) {
 	until := f.skipTill.Load()
 	if until == 0 {
-		return true
+		return true, false
 	}
 	now := f.now().UnixNano()
-	return now >= until && f.skipTill.CompareAndSwap(until, now+f.cooldown.Nanoseconds())
+	if now >= until && f.skipTill.CompareAndSwap(until, now+f.cooldown.Nanoseconds()) {
+		return true, true
+	}
+	return false, false
 }
 
 func (f *Fallback) failed(err error) {
@@ -75,7 +81,7 @@ func (f *Fallback) failed(err error) {
 }
 
 func (f *Fallback) recovered() {
-	if f.skipTill.Load() != 0 && f.skipTill.Swap(0) != 0 {
+	if f.skipTill.Swap(0) != 0 {
 		f.log.Info("shared rate limiter recovered")
 	}
 }
