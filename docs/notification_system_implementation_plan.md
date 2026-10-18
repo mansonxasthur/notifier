@@ -29,16 +29,16 @@ Done when all three entry points start, connect, and exit cleanly. Graceful shut
 
 Goal: the Dispatcher validates, persists durably, and acknowledges, with correct duplicate handling.
 
-- [ ] HTTP endpoint for single and batch requests with API key authentication
-- [ ] One API key, sent in `X-API-KEY` and compared with the configured value; identifying the calling service is out of scope
-- [ ] Per-recipient validation with reason codes, run before any database write, including a check that every listed channel has content in an accepted shape (text for SMS, inline content or a template ID with variables for email and WhatsApp)
-- [ ] A request over the recipient limit (3,000, so at most 9,000 deliveries with three channels) is rejected, and inserts run in chunks of about 5,000 rows per statement, all inside one transaction
-- [ ] In-memory de-duplication of repeated recipients inside one payload
-- [ ] Batch insert of deliveries with `ON CONFLICT DO NOTHING ... RETURNING`, plus outbox rows for the inserted rows only, in one transaction (see the SQL recommendations below)
-- [ ] Expiry stamped on each delivery as `expires_at` from the request's optional expires\_at, or else the notification type's default; a deadline in the past is rejected at validation, and any future deadline overrides the default
-- [ ] The Dispatcher never talks to the broker: the outbox rows written in the same transaction are the only hand-off to the queue
-- [ ] Response with `accepted`, `duplicates`, and `rejected` (with reasons), and the status codes from the log
-- [ ] Idempotent retry test: the same request twice creates no new rows, and the same key with a different payload is treated as a duplicate (the first request wins)
+- [x] HTTP endpoint for single and batch requests with API key authentication
+- [x] One API key, sent in `X-API-KEY` and compared with the configured value; identifying the calling service is out of scope
+- [x] Per-recipient validation with reason codes, run before any database write, including a check that every listed channel has content in an accepted shape (text for SMS, inline content or a template ID with variables for email and WhatsApp)
+- [x] A request over the recipient limit (3,000, so at most 9,000 deliveries with three channels) is rejected, and inserts run in chunks of about 5,000 rows per statement, all inside one transaction
+- [x] In-memory de-duplication of repeated recipients inside one payload (the first occurrence of each recipient and channel wins; repeats count under `duplicates`)
+- [x] Batch insert of deliveries with `ON CONFLICT DO NOTHING ... RETURNING`, plus outbox rows for the inserted rows only, in one transaction (see the SQL recommendations below)
+- [x] Expiry stamped on each delivery as `expires_at` from the request's optional expires\_at, or else the notification type's default; a deadline in the past is rejected at validation, and any future deadline overrides the default
+- [x] The Dispatcher never talks to the broker: the outbox rows written in the same transaction are the only hand-off to the queue
+- [x] Response with `accepted`, `duplicates`, and `rejected` (with reasons), and the status codes from the log
+- [x] Idempotent retry test: the same request twice creates no new rows, and the same key with a different payload is treated as a duplicate (the first request wins)
 
 **SQL recommendations for the accept path**
 
