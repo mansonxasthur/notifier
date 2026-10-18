@@ -161,6 +161,22 @@ type Sender struct {
 	MaxClaims    int           `yaml:"max_claims"`
 	// Prefetch is how many unacknowledged messages a sender holds per queue.
 	Prefetch int `yaml:"prefetch"`
+	// ScanBatch is how many due retries one scan claims.
+	ScanBatch int     `yaml:"scan_batch"`
+	Breaker   Breaker `yaml:"breaker"`
+}
+
+// Breaker configures each sender's local circuit breaker, one per provider.
+type Breaker struct {
+	// FailureThreshold is how many consecutive failures open the breaker.
+	FailureThreshold int `yaml:"failure_threshold"`
+	// OpenFor is how long the breaker stays open before it lets one probe through.
+	OpenFor time.Duration `yaml:"open_for"`
+}
+
+// Policy converts the configured breaker to the domain type.
+func (b Breaker) Policy() domain.BreakerPolicy {
+	return domain.BreakerPolicy{FailureThreshold: b.FailureThreshold, OpenFor: b.OpenFor}
 }
 
 // Load reads the YAML file at path, applies environment overrides, and validates the result.
@@ -322,6 +338,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Sender.Prefetch <= 0 {
 		bad("sender.prefetch must be positive")
+	}
+	if c.Sender.ScanBatch <= 0 {
+		bad("sender.scan_batch must be positive")
+	}
+	if c.Sender.Breaker.FailureThreshold <= 0 {
+		bad("sender.breaker.failure_threshold must be positive")
+	}
+	if c.Sender.Breaker.OpenFor <= 0 {
+		bad("sender.breaker.open_for must be positive")
 	}
 
 	return errors.Join(errs...)

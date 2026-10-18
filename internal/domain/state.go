@@ -98,13 +98,18 @@ const (
 	ReasonProviderFailed     FailureReason = "PROVIDER_FAILED"
 	ReasonBounced            FailureReason = "BOUNCED"
 	ReasonInvalidDestination FailureReason = "INVALID_DESTINATION"
+	// ReasonExpired: the delivery's deadline passed before it was sent.
+	ReasonExpired FailureReason = "EXPIRED"
+	// ReasonNoProviderAvailable: the breaker is open for every provider left to try.
+	ReasonNoProviderAvailable FailureReason = "NO_PROVIDER_AVAILABLE"
 )
 
 // Valid reports whether r is one of the enum values.
 func (r FailureReason) Valid() bool {
 	switch r {
 	case ReasonMaxAttemptsExceeded, ReasonMaxClaimsExceeded, ReasonPublishFailed,
-		ReasonProviderRejected, ReasonProviderFailed, ReasonBounced, ReasonInvalidDestination:
+		ReasonProviderRejected, ReasonProviderFailed, ReasonBounced, ReasonInvalidDestination,
+		ReasonExpired, ReasonNoProviderAvailable:
 		return true
 	}
 	return false
