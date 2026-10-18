@@ -18,8 +18,10 @@ type Provider struct {
 	Timeout time.Duration
 	// Next is the provider after this one on its channel, or empty for the last.
 	Next string
-	// Backoff spaces a requeued row's retry; it is the provider's own, not the relay's.
-	Backoff domain.Backoff
+	// MaxRetries and Backoff are the provider's own retry policy, which a requeued row follows
+	// exactly as it would after a failed send.
+	MaxRetries int
+	Backoff    domain.Backoff
 }
 
 // JanitorConfig tunes the sweeps.
@@ -102,11 +104,16 @@ func (j *Janitor) recover(ctx context.Context, p Provider, s domain.StuckInbox) 
 	case res == ports.CheckAccepted:
 		action = "accepted"
 		ok, err = j.inbox.Accept(ctx, s)
-	case res == ports.CheckNotFound:
-		// The provider never got it, so the same provider is safe to try again.
+	case res == ports.CheckNotFound && s.Retries < p.MaxRetries:
+		// The provider never got it, so the same provider is safe to try again. This spends
+		// a retry, so a provider that keeps losing messages is eventually left behind.
 		action = "requeued"
-		next := time.Now().Add(p.Backoff.Delay(s.ClaimCount, jitter()))
+		next := time.Now().Add(p.Backoff.Delay(s.Retries+1, jitter()))
 		ok, err = j.inbox.Requeue(ctx, s, next)
+	case res == ports.CheckNotFound && p.Next == "":
+		// Out of retries on the last provider, and it says it never had the message.
+		action = "failed"
+		ok, err = j.inbox.Fail(ctx, s.DeliveryID, s.ClaimCount, domain.FailureTimeout, domain.ReasonProviderFailed)
 	case p.Next != "":
 		action = "switched"
 		ok, err = j.inbox.Switch(ctx, s.DeliveryID, s.ClaimCount, p.Next, domain.FailureTimeout, time.Now())

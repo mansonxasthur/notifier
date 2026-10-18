@@ -151,7 +151,7 @@ func (s *InboxStore) ClaimDue(ctx context.Context, limit int, maxClaims int) ([]
 }
 
 const listStuckInbox = `
-SELECT delivery_id, provider, claim_count FROM inbox
+SELECT delivery_id, provider, claim_count, retries FROM inbox
 WHERE provider = $1 AND state = $2 AND last_try < now() - make_interval(secs => $3)
 ORDER BY last_try
 LIMIT $4`
@@ -164,7 +164,7 @@ func (s *InboxStore) ListStuck(ctx context.Context, provider string, olderThan t
 	}
 	stuck, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (domain.StuckInbox, error) {
 		var s domain.StuckInbox
-		err := r.Scan(&s.DeliveryID, &s.Provider, &s.ClaimCount)
+		err := r.Scan(&s.DeliveryID, &s.Provider, &s.ClaimCount, &s.Retries)
 		return s, err
 	})
 	if err != nil {
@@ -174,13 +174,13 @@ func (s *InboxStore) ListStuck(ctx context.Context, provider string, olderThan t
 }
 
 const requeueInbox = `
-UPDATE inbox SET state = $4, next_attempt_at = $3, last_try = now()
-WHERE delivery_id = $1 AND state = $5 AND claim_count = $2`
+UPDATE inbox SET state = $4, next_attempt_at = $3, retries = retries + 1, last_try = now()
+WHERE delivery_id = $1 AND state = $5 AND claim_count = $2 AND retries = $6`
 
 // Requeue implements ports.InboxStore.
 func (s *InboxStore) Requeue(ctx context.Context, st domain.StuckInbox, next time.Time) (bool, error) {
 	tag, err := s.db.Pool().Exec(ctx, requeueInbox, st.DeliveryID, st.ClaimCount, next,
-		domain.InboxWaitingRetry, domain.InboxProcessing)
+		domain.InboxWaitingRetry, domain.InboxProcessing, st.Retries)
 	if err != nil {
 		return false, fmt.Errorf("requeue inbox: %w", err)
 	}

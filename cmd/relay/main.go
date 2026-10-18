@@ -28,7 +28,7 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	var providers []relay.Provider
 	for _, ch := range cfg.Channels {
 		for i, p := range ch.Providers {
-			rp := relay.Provider{Name: p.Name, Timeout: p.Timeout, Backoff: p.Backoff.Policy()}
+			rp := relay.Provider{Name: p.Name, Timeout: p.Timeout, MaxRetries: p.MaxRetries, Backoff: p.Backoff.Policy()}
 			if i+1 < len(ch.Providers) {
 				rp.Next = ch.Providers[i+1].Name
 			}

@@ -162,4 +162,6 @@ type StuckInbox struct {
 	DeliveryID int64
 	Provider   string
 	ClaimCount int
+	// Retries is how many retries the row has spent on its provider.
+	Retries int
 }

@@ -206,7 +206,7 @@ func (a answers) Check(_ context.Context, _ string, id int64) (ports.CheckResult
 func TestJanitorRecoversStuckInbox(t *testing.T) {
 	ctx := context.Background()
 	db := startDB(t)
-	seed(t, db, 5)
+	seed(t, db, 7)
 	inbox := postgres.NewInboxStore(db)
 
 	var ids []int64
@@ -222,10 +222,11 @@ func TestJanitorRecoversStuckInbox(t *testing.T) {
 		ids = append(ids, id)
 	}
 	rows.Close()
-	// The first four were stuck on the primary; the last on the fallback.
+	// Four were stuck on the primary, then one more on the primary with its retries spent; one
+	// was stuck on the fallback, and one more on the fallback with its retries spent.
 	for i, id := range ids {
 		provider := "sms-a"
-		if i == 4 {
+		if i == 4 || i == 6 {
 			provider = "sms-b"
 		}
 		if _, err := inbox.Claim(ctx, id, provider, 5); err != nil {
@@ -235,6 +236,9 @@ func TestJanitorRecoversStuckInbox(t *testing.T) {
 	if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET last_try = now() - interval '1 minute'`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET retries = 1 WHERE delivery_id = ANY($1)`, []int64{ids[5], ids[6]}); err != nil {
+		t.Fatal(err)
+	}
 
 	checker := answers{
 		ids[0]: {res: ports.CheckAccepted},
@@ -242,12 +246,14 @@ func TestJanitorRecoversStuckInbox(t *testing.T) {
 		ids[2]: {res: ports.CheckUnknown},
 		ids[3]: {err: errors.New("lookup failed")},
 		ids[4]: {res: ports.CheckUnknown},
+		ids[5]: {res: ports.CheckNotFound},
+		ids[6]: {res: ports.CheckNotFound},
 	}
 	j := relay.NewJanitor(postgres.NewOutboxStore(db), inbox, checker, relay.JanitorConfig{
 		Interval: time.Hour, OutboxStuckAfter: time.Hour, InboxStuckMargin: time.Second, Backoff: backoff,
 		Providers: []relay.Provider{
-			{Name: "sms-a", Timeout: time.Second, Next: "sms-b", Backoff: backoff},
-			{Name: "sms-b", Timeout: time.Second, Backoff: backoff},
+			{Name: "sms-a", Timeout: time.Second, Next: "sms-b", MaxRetries: 1, Backoff: backoff},
+			{Name: "sms-b", Timeout: time.Second, MaxRetries: 1, Backoff: backoff},
 		},
 	}, quiet)
 	j.SweepInbox(ctx)
@@ -259,6 +265,8 @@ func TestJanitorRecoversStuckInbox(t *testing.T) {
 		{"WAITING_RETRY", "sms-b", "PENDING"}, // no answer: on to the fallback
 		{"WAITING_RETRY", "sms-b", "PENDING"}, // the lookup failed: the same
 		{"DEAD", "sms-b", "UNRESOLVED"},       // no answer from the last provider
+		{"WAITING_RETRY", "sms-b", "PENDING"}, // not found, retries spent: on to the fallback
+		{"DEAD", "sms-b", "FAILED"},           // not found, retries spent, no fallback
 	} {
 		var got want
 		if err := db.Pool().QueryRow(ctx, `
@@ -270,8 +278,12 @@ func TestJanitorRecoversStuckInbox(t *testing.T) {
 			t.Errorf("delivery %d ended %+v, want %+v", i, got, w)
 		}
 	}
-	if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE provider = 'sms-b' AND state = 'WAITING_RETRY' AND retries = 0 AND next_attempt_at IS NOT NULL`); got != 2 {
-		t.Errorf("switched rows with retries reset = %d, want 2", got)
+	if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE provider = 'sms-b' AND state = 'WAITING_RETRY' AND retries = 0 AND next_attempt_at IS NOT NULL`); got != 3 {
+		t.Errorf("switched rows with retries reset = %d, want 3", got)
+	}
+	// The requeued row spent a retry, so the provider cannot keep it forever.
+	if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE delivery_id = $1 AND provider = 'sms-a' AND retries = 1`, ids[1]); got != 1 {
+		t.Error("a requeue must spend a retry")
 	}
 }
 

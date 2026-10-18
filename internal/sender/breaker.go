@@ -76,18 +76,25 @@ func (b *Breakers) Allow(provider string) bool {
 	}
 }
 
-// Success records a call that worked.
+// Success records a call that worked. A success that arrives while the breaker is open comes
+// from a call made before it opened: it says nothing about the provider now, so the open
+// period stands. Once half-open, any success closes the breaker, because it shows the provider
+// working; telling a stale success from the probe's would need a ticket per call.
 func (b *Breakers) Success(provider string) Transition {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	br := b.get(provider)
-	br.failures = 0
-	br.probing = false
-	if br.state == stateClosed {
+	switch br.state {
+	case stateOpen:
 		return NoChange
+	case stateHalfOpen:
+		br.probing = false
+		br.failures = 0
+		br.state = stateClosed
+		return Closed
 	}
-	br.state = stateClosed
-	return Closed
+	br.failures = 0
+	return NoChange
 }
 
 // Failure records a call that failed on the provider's side or timed out.

@@ -108,3 +108,21 @@ func TestBreakerReleaseFreesTheProbeSlot(t *testing.T) {
 		t.Fatal("probe slot stayed taken after Release")
 	}
 }
+
+func TestBreakerIgnoresAStaleSuccessWhileOpen(t *testing.T) {
+	b, c := newTestBreakers()
+	for i := 0; i < 3; i++ {
+		b.Failure("a")
+	}
+	// A call made before the breaker opened finishes well.
+	if got := b.Success("a"); got != NoChange {
+		t.Fatalf("stale success: transition %v, want NoChange", got)
+	}
+	if b.Allow("a") {
+		t.Fatal("a stale success ended the open period")
+	}
+	c.advance(10 * time.Second)
+	if !b.Allow("a") {
+		t.Fatal("no probe after the open period")
+	}
+}
