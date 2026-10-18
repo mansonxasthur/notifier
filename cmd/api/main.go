@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mansonxasthur/notifier/internal/adapters/postgres"
+	"github.com/mansonxasthur/notifier/internal/adapters/ratelimit"
 	"github.com/mansonxasthur/notifier/internal/adapters/redis"
 	"github.com/mansonxasthur/notifier/internal/adapters/webhookauth"
 	"github.com/mansonxasthur/notifier/internal/app"
@@ -14,6 +15,16 @@ import (
 	"github.com/mansonxasthur/notifier/internal/httpserver"
 	"github.com/mansonxasthur/notifier/internal/httpserver/requests"
 	"github.com/mansonxasthur/notifier/internal/lifecycle"
+)
+
+const (
+	// globalBucketKey is the Redis key every Dispatcher instance draws the global limit from.
+	globalBucketKey = "rl:global"
+	// sharedLimiterTimeout bounds one Redis call, well inside the 5 second target, so a hung
+	// Redis delays a request by little before the local limiter answers.
+	sharedLimiterTimeout = 100 * time.Millisecond
+	// sharedLimiterCooldown is how long the Dispatcher leaves Redis alone after a failure.
+	sharedLimiterCooldown = time.Second
 )
 
 func main() { os.Exit(app.Main("api", build)) }
@@ -31,11 +42,16 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	}
 	db := postgres.New(cfg.DatabaseURL)
 	cache := redis.New(cfg.RedisURL)
+	limiter := ratelimit.NewFallback(
+		redis.NewLimiter(cache.Scripter(), globalBucketKey, cfg.Limits.Global.Policy()),
+		ratelimit.NewLocal(cfg.Limits.Global.Policy(), time.Now),
+		sharedLimiterTimeout, sharedLimiterCooldown, log, time.Now)
 	mux := httpserver.Health(log, db, cache)
 	err = httpserver.RegisterNotifications(mux, httpserver.NotificationsOptions{
 		Log:          log,
 		Store:        postgres.NewNotificationStore(db, cfg.Accept.ChunkSize),
 		APIKey:       cfg.APIKey,
+		Limiter:      limiter,
 		Policy:       policy(cfg),
 		MaxBodyBytes: cfg.Accept.MaxBodyBytes,
 	})

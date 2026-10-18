@@ -19,6 +19,7 @@ import (
 	"github.com/mansonxasthur/notifier/internal/adapters/provider"
 	"github.com/mansonxasthur/notifier/internal/adapters/rabbitmq"
 	"github.com/mansonxasthur/notifier/internal/adapters/rabbitmq/rmqtest"
+	"github.com/mansonxasthur/notifier/internal/adapters/ratelimit"
 	"github.com/mansonxasthur/notifier/internal/adapters/webhookauth"
 	"github.com/mansonxasthur/notifier/internal/config"
 	"github.com/mansonxasthur/notifier/internal/domain"
@@ -131,6 +132,7 @@ func newStack(t *testing.T) *stack {
 	if err := httpserver.RegisterNotifications(mux, httpserver.NotificationsOptions{
 		Log: quiet, Store: postgres.NewNotificationStore(db, cfg.Accept.ChunkSize), APIKey: "k",
 		Policy: requests.Policy{BatchLimit: cfg.BatchLimit, Expiry: expiry}, MaxBodyBytes: cfg.Accept.MaxBodyBytes,
+		Limiter: ratelimit.NewLocal(cfg.Limits.Global.Policy(), time.Now),
 	}); err != nil {
 		t.Fatal(err)
 	}

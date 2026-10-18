@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mansonxasthur/notifier/internal/adapters/ratelimit"
 	"github.com/mansonxasthur/notifier/internal/domain"
 	"github.com/mansonxasthur/notifier/internal/httpserver/requests"
 	"github.com/mansonxasthur/notifier/internal/ports"
@@ -38,7 +39,23 @@ func (f *fakeStore) Create(_ context.Context, n *domain.Notification) (ports.Cre
 	return f.res, f.err
 }
 
+// fakeLimiter records the charges it is asked for and answers with a fixed decision.
+type fakeLimiter struct {
+	decision ports.Decision
+	err      error
+	charges  []int
+}
+
+func (f *fakeLimiter) Allow(_ context.Context, n int) (ports.Decision, error) {
+	f.charges = append(f.charges, n)
+	return f.decision, f.err
+}
+
 func newHandler(store ports.NotificationStore, maxBody int64) http.Handler {
+	return newHandlerWith(store, maxBody, &fakeLimiter{decision: ports.Decision{Allowed: true}})
+}
+
+func newHandlerWith(store ports.NotificationStore, maxBody int64, limiter ports.Limiter) http.Handler {
 	mux := Health(slog.New(slog.DiscardHandler), pinger{})
 	err := RegisterNotifications(mux, NotificationsOptions{
 		Log:    slog.New(slog.DiscardHandler),
@@ -48,6 +65,7 @@ func newHandler(store ports.NotificationStore, maxBody int64) http.Handler {
 			BatchLimit: 3,
 			Expiry:     map[string]time.Duration{"match_alert": 2 * time.Hour},
 		},
+		Limiter:      limiter,
 		MaxBodyBytes: maxBody,
 		Now:          func() time.Time { return testNow },
 	})
@@ -122,6 +140,134 @@ func TestRegisterRefusesEmptyKey(t *testing.T) {
 	err := RegisterNotifications(http.NewServeMux(), NotificationsOptions{Log: slog.New(slog.DiscardHandler), Store: &fakeStore{}})
 	if err == nil {
 		t.Fatal("want an error for an empty API key")
+	}
+}
+
+func TestRegisterRefusesNilLimiter(t *testing.T) {
+	err := RegisterNotifications(http.NewServeMux(), NotificationsOptions{Log: slog.New(slog.DiscardHandler), Store: &fakeStore{}, APIKey: testAPIKey})
+	if err == nil {
+		t.Fatal("want an error for a nil limiter: intake would be unlimited")
+	}
+}
+
+func TestCreateRateLimited(t *testing.T) {
+	two := okRecipient + `,{"recipient_id":"u_2","channels":{"sms":"+201000000001"}}`
+	tests := []struct {
+		name       string
+		wait       time.Duration
+		retryAfter string
+	}{
+		{"rounds up to whole seconds", 1500 * time.Millisecond, "2"},
+		{"never below one second", 20 * time.Millisecond, "1"},
+		{"exact seconds stay", 3 * time.Second, "3"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeStore{res: ports.CreateResult{Created: 2}}
+			limiter := &fakeLimiter{decision: ports.Decision{RetryAfter: tc.wait}}
+			rec := post(t, newHandlerWith(store, 1<<20, limiter), testAPIKey, body("["+two+"]"))
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("status = %d, want 429", rec.Code)
+			}
+			if got := rec.Header().Get("Retry-After"); got != tc.retryAfter {
+				t.Errorf("Retry-After = %q, want %q", got, tc.retryAfter)
+			}
+			if got := decode[map[string]string](t, rec)["error"]; got != "RATE_LIMITED" {
+				t.Errorf("error = %q, want RATE_LIMITED", got)
+			}
+			if store.calls != 0 {
+				t.Error("a refused request must not reach the store")
+			}
+		})
+	}
+}
+
+func TestCreateChargesTheDeliveriesThatWouldBeStored(t *testing.T) {
+	limiter := &fakeLimiter{decision: ports.Decision{Allowed: true}}
+	store := &fakeStore{res: ports.CreateResult{Created: 3}}
+	h := newHandlerWith(store, 1<<20, limiter)
+
+	// Two valid recipients on two channels and one invalid one: 4 deliveries, not 5.
+	recipients := `[
+		{"recipient_id":"u_1","channels":{"sms":"+201000000001","email":"a@example.com"}},
+		{"recipient_id":"u_2","channels":{"sms":"+201000000002","email":"b@example.com"}},
+		` + badRecipient + `]`
+	payload := body(recipients, func(m map[string]any) {
+		m["content"] = map[string]any{
+			"sms":   map[string]any{"text": "hi"},
+			"email": map[string]any{"subject": "s", "body": "b"},
+		}
+	})
+	if rec := post(t, h, testAPIKey, payload); rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	if len(limiter.charges) != 1 || limiter.charges[0] != 4 {
+		t.Fatalf("charges = %v, want one charge of 4", limiter.charges)
+	}
+}
+
+func TestCreateDoesNotChargeWhatItRefusesFirst(t *testing.T) {
+	tests := map[string]struct {
+		key     string
+		payload string
+	}{
+		"unauthenticated":   {"", body("[" + okRecipient + "]")},
+		"malformed":         {testAPIKey, `{`},
+		"every row invalid": {testAPIKey, body("[" + badRecipient + "]")},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			limiter := &fakeLimiter{decision: ports.Decision{Allowed: true}}
+			post(t, newHandlerWith(&fakeStore{}, 1<<20, limiter), tc.key, tc.payload)
+			if len(limiter.charges) != 0 {
+				t.Fatalf("charged %v for a request that never had deliveries to store", limiter.charges)
+			}
+		})
+	}
+}
+
+func TestCreateWhenTheLimiterFails(t *testing.T) {
+	store := &fakeStore{}
+	limiter := &fakeLimiter{err: errors.New("boom")}
+	rec := post(t, newHandlerWith(store, 1<<20, limiter), testAPIKey, body("["+okRecipient+"]"))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if store.calls != 0 {
+		t.Error("a request the limiter could not judge must not be stored")
+	}
+}
+
+func TestBurstAboveTheLimitIsRefusedThenAdmittedAfterTheWait(t *testing.T) {
+	now := testNow
+	limiter := ratelimit.NewLocal(domain.BucketPolicy{Rate: 1, Burst: 2}, func() time.Time { return now })
+	store := &fakeStore{res: ports.CreateResult{Created: 1}}
+	h := newHandlerWith(store, 1<<20, limiter)
+	payload := body("[" + okRecipient + "]")
+
+	for i := range 2 {
+		if rec := post(t, h, testAPIKey, payload); rec.Code != http.StatusAccepted {
+			t.Fatalf("request %d within the burst = %d, want 202", i, rec.Code)
+		}
+	}
+	rec := post(t, h, testAPIKey, payload)
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") != "2" {
+		t.Fatalf("request above the burst = %d, Retry-After %q; want 429 and 2", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	if store.calls != 2 {
+		t.Fatalf("store saw %d requests, want the 2 admitted ones", store.calls)
+	}
+	now = now.Add(2 * time.Second)
+	if rec := post(t, h, testAPIKey, payload); rec.Code != http.StatusAccepted {
+		t.Fatalf("request after the Retry-After wait = %d, want 202", rec.Code)
+	}
+}
+
+func TestRetryAfterSeconds(t *testing.T) {
+	for wait, want := range map[time.Duration]string{0: "1", time.Nanosecond: "1", time.Second: "1", time.Second + 1: "2", 90 * time.Second: "90"} {
+		if got := retryAfterSeconds(wait); got != want {
+			t.Errorf("retryAfterSeconds(%v) = %s, want %s", wait, got, want)
+		}
 	}
 }
 
