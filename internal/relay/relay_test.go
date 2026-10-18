@@ -14,7 +14,6 @@ import (
 
 	"github.com/mansonxasthur/notifier/internal/adapters/postgres"
 	"github.com/mansonxasthur/notifier/internal/adapters/postgres/pgtest"
-	"github.com/mansonxasthur/notifier/internal/adapters/provider"
 	"github.com/mansonxasthur/notifier/internal/adapters/rabbitmq"
 	"github.com/mansonxasthur/notifier/internal/adapters/rabbitmq/memory"
 	"github.com/mansonxasthur/notifier/internal/adapters/rabbitmq/rmqtest"
@@ -177,7 +176,7 @@ func TestKilledRelayIsRecovered(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	queue := memory.New()
-	janitor := relay.NewJanitor(outbox, postgres.NewInboxStore(db), provider.Unchecked{}, relay.JanitorConfig{
+	janitor := relay.NewJanitor(outbox, postgres.NewInboxStore(db), fakeChecker{}, relay.JanitorConfig{
 		Interval: 20 * time.Millisecond, OutboxStuckAfter: 30 * time.Millisecond,
 		InboxStuckMargin: time.Second, Backoff: backoff,
 	}, quiet)
