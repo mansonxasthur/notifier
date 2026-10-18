@@ -128,6 +128,9 @@ func TestInboxStuck(t *testing.T) {
 	if err != nil || len(stuck) != 1 || stuck[0].DeliveryID != ids[0] || stuck[0].ClaimCount != 1 {
 		t.Fatalf("stuck = %+v, err = %v, want only delivery %d", stuck, err, ids[0])
 	}
+	if stuck[0].ExpiresAt.Before(time.Now()) {
+		t.Errorf("ExpiresAt = %v, want the delivery's future deadline", stuck[0].ExpiresAt)
+	}
 	if other, _ := store.ListStuck(ctx, "sms-b", 30*time.Second, 10); len(other) != 0 {
 		t.Error("another provider's rows must not be listed")
 	}

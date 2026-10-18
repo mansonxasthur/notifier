@@ -156,9 +156,10 @@ func (s *InboxStore) ClaimDue(ctx context.Context, limit int, maxClaims int) ([]
 }
 
 const listStuckInbox = `
-SELECT delivery_id, provider, claim_count, retries FROM inbox
-WHERE provider = $1 AND state = $2 AND last_try < now() - make_interval(secs => $3)
-ORDER BY last_try
+SELECT i.delivery_id, i.provider, i.claim_count, i.retries, d.expires_at
+FROM inbox i JOIN deliveries d ON d.id = i.delivery_id
+WHERE i.provider = $1 AND i.state = $2 AND i.last_try < now() - make_interval(secs => $3)
+ORDER BY i.last_try
 LIMIT $4`
 
 // ListStuck implements ports.InboxStore.
@@ -169,7 +170,7 @@ func (s *InboxStore) ListStuck(ctx context.Context, provider string, olderThan t
 	}
 	stuck, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (domain.StuckInbox, error) {
 		var s domain.StuckInbox
-		err := r.Scan(&s.DeliveryID, &s.Provider, &s.ClaimCount, &s.Retries)
+		err := r.Scan(&s.DeliveryID, &s.Provider, &s.ClaimCount, &s.Retries, &s.ExpiresAt)
 		return s, err
 	})
 	if err != nil {

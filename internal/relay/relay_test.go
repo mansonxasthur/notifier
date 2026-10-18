@@ -206,7 +206,7 @@ func (a answers) Check(_ context.Context, _ string, id int64) (ports.CheckResult
 func TestJanitorRecoversStuckInbox(t *testing.T) {
 	ctx := context.Background()
 	db := startDB(t)
-	seed(t, db, 7)
+	seed(t, db, 12)
 	inbox := postgres.NewInboxStore(db)
 
 	var ids []int64
@@ -226,7 +226,7 @@ func TestJanitorRecoversStuckInbox(t *testing.T) {
 	// was stuck on the fallback, and one more on the fallback with its retries spent.
 	for i, id := range ids {
 		provider := "sms-a"
-		if i == 4 || i == 6 {
+		if i == 4 || i == 6 || i == 10 {
 			provider = "sms-b"
 		}
 		if _, err := inbox.Claim(ctx, id, provider, 5); err != nil {
@@ -236,18 +236,27 @@ func TestJanitorRecoversStuckInbox(t *testing.T) {
 	if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET last_try = now() - interval '1 minute'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET retries = 1 WHERE delivery_id = ANY($1)`, []int64{ids[5], ids[6]}); err != nil {
+	if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET retries = 1 WHERE delivery_id = ANY($1)`, []int64{ids[5], ids[6], ids[10]}); err != nil {
+		t.Fatal(err)
+	}
+	// The last five are past their deadline, two of them on the fallback with retries spent or a failed lookup.
+	if _, err := db.Pool().Exec(ctx, `UPDATE deliveries SET expires_at = now() - interval '1 minute' WHERE id = ANY($1)`, ids[7:]); err != nil {
 		t.Fatal(err)
 	}
 
 	checker := answers{
-		ids[0]: {res: ports.CheckAccepted},
-		ids[1]: {res: ports.CheckNotFound},
-		ids[2]: {res: ports.CheckUnknown},
-		ids[3]: {err: errors.New("lookup failed")},
-		ids[4]: {res: ports.CheckUnknown},
-		ids[5]: {res: ports.CheckNotFound},
-		ids[6]: {res: ports.CheckNotFound},
+		ids[0]:  {res: ports.CheckAccepted},
+		ids[1]:  {res: ports.CheckNotFound},
+		ids[2]:  {res: ports.CheckUnknown},
+		ids[3]:  {err: errors.New("lookup failed")},
+		ids[4]:  {res: ports.CheckUnknown},
+		ids[5]:  {res: ports.CheckNotFound},
+		ids[6]:  {res: ports.CheckNotFound},
+		ids[7]:  {res: ports.CheckNotFound},
+		ids[8]:  {res: ports.CheckUnknown},
+		ids[9]:  {res: ports.CheckAccepted},
+		ids[10]: {res: ports.CheckNotFound},
+		ids[11]: {err: errors.New("lookup failed")},
 	}
 	j := relay.NewJanitor(postgres.NewOutboxStore(db), inbox, checker, relay.JanitorConfig{
 		Interval: time.Hour, OutboxStuckAfter: time.Hour, InboxStuckMargin: time.Second, Backoff: backoff,
@@ -267,6 +276,11 @@ func TestJanitorRecoversStuckInbox(t *testing.T) {
 		{"DEAD", "sms-b", "UNRESOLVED"},       // no answer from the last provider
 		{"WAITING_RETRY", "sms-b", "PENDING"}, // not found, retries spent: on to the fallback
 		{"DEAD", "sms-b", "FAILED"},           // not found, retries spent, no fallback
+		{"DEAD", "sms-a", "FAILED"},           // past its deadline, not found: never sent again
+		{"DEAD", "sms-a", "UNRESOLVED"},       // past its deadline, no answer: it may be held
+		{"DONE", "sms-a", "ACCEPTED"},         // past its deadline, but the provider has it
+		{"DEAD", "sms-b", "FAILED"},           // past its deadline on the last provider with retries spent: EXPIRED, not a retry decision
+		{"DEAD", "sms-a", "UNRESOLVED"},       // past its deadline and the lookup failed: not moved to the fallback
 	} {
 		var got want
 		if err := db.Pool().QueryRow(ctx, `
@@ -280,6 +294,9 @@ func TestJanitorRecoversStuckInbox(t *testing.T) {
 	}
 	if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE provider = 'sms-b' AND state = 'WAITING_RETRY' AND retries = 0 AND next_attempt_at IS NOT NULL`); got != 3 {
 		t.Errorf("switched rows with retries reset = %d, want 3", got)
+	}
+	if got := count(t, db.Pool(), `SELECT count(*) FROM deliveries WHERE id = $1 AND failure_reason = 'EXPIRED'`, ids[7]); got != 1 {
+		t.Error("a row past its deadline that the provider never had must fail EXPIRED")
 	}
 	// The requeued row spent a retry, so the provider cannot keep it forever.
 	if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE delivery_id = $1 AND provider = 'sms-a' AND retries = 1`, ids[1]); got != 1 {

@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 // DeliveryState is the business state of a delivery: did the user get it?
 type DeliveryState string
 
@@ -164,4 +166,6 @@ type StuckInbox struct {
 	ClaimCount int
 	// Retries is how many retries the row has spent on its provider.
 	Retries int
+	// ExpiresAt is the delivery's deadline.
+	ExpiresAt time.Time
 }
