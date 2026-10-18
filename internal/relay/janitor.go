@@ -16,6 +16,10 @@ const inboxSweepLimit = 500
 type Provider struct {
 	Name    string
 	Timeout time.Duration
+	// Next is the provider after this one on its channel, or empty for the last.
+	Next string
+	// Backoff spaces a requeued row's retry; it is the provider's own, not the relay's.
+	Backoff domain.Backoff
 }
 
 // JanitorConfig tunes the sweeps.
@@ -68,8 +72,10 @@ func (j *Janitor) SweepOutbox(ctx context.Context) {
 	}
 }
 
-// SweepInbox recovers inbox rows stuck in PROCESSING. A row is sent again only when the
-// provider does not confirm having the message: a confirmed one is ACCEPTED instead.
+// SweepInbox recovers inbox rows stuck in PROCESSING with the same check the sender makes
+// after a timeout. A provider that has the message makes it ACCEPTED. One that does not
+// know it gets the row again. One that cannot say moves the row to the next provider, or
+// ends the delivery UNRESOLVED if there is none.
 func (j *Janitor) SweepInbox(ctx context.Context) {
 	for _, p := range j.cfg.Providers {
 		stuck, err := j.inbox.ListStuck(ctx, p.Name, p.Timeout+j.cfg.InboxStuckMargin, inboxSweepLimit)
@@ -78,27 +84,37 @@ func (j *Janitor) SweepInbox(ctx context.Context) {
 			continue
 		}
 		for _, s := range stuck {
-			j.recover(ctx, s)
+			j.recover(ctx, p, s)
 		}
 	}
 }
 
-func (j *Janitor) recover(ctx context.Context, s domain.StuckInbox) {
+func (j *Janitor) recover(ctx context.Context, p Provider, s domain.StuckInbox) {
 	res, err := j.checker.Check(ctx, s.Provider, s.DeliveryID)
 	if err != nil {
-		// No answer is handled like an unknown one: the row is retried.
 		j.log.Warn("provider check failed", "delivery_id", s.DeliveryID, "provider", s.Provider, "error", err)
 		res = ports.CheckUnknown
 	}
 
-	if res == ports.CheckAccepted {
-		ok, err := j.inbox.Accept(ctx, s)
-		j.logRecovery(s, "accepted", ok, err)
-		return
+	var ok bool
+	var action string
+	switch {
+	case res == ports.CheckAccepted:
+		action = "accepted"
+		ok, err = j.inbox.Accept(ctx, s)
+	case res == ports.CheckNotFound:
+		// The provider never got it, so the same provider is safe to try again.
+		action = "requeued"
+		next := time.Now().Add(p.Backoff.Delay(s.ClaimCount, jitter()))
+		ok, err = j.inbox.Requeue(ctx, s, next)
+	case p.Next != "":
+		action = "switched"
+		ok, err = j.inbox.Switch(ctx, s.DeliveryID, s.ClaimCount, p.Next, domain.FailureTimeout, time.Now())
+	default:
+		action = "unresolved"
+		ok, err = j.inbox.Unresolve(ctx, s.DeliveryID, s.ClaimCount, domain.FailureTimeout)
 	}
-	next := time.Now().Add(j.cfg.Backoff.Delay(s.ClaimCount, jitter()))
-	ok, err := j.inbox.Requeue(ctx, s, next)
-	j.logRecovery(s, "requeued", ok, err)
+	j.logRecovery(s, action, ok, err)
 }
 
 func (j *Janitor) logRecovery(s domain.StuckInbox, action string, ok bool, err error) {
