@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 )
 
@@ -64,8 +65,7 @@ func stopAll(log *slog.Logger, timeout time.Duration, started []Component) error
 	defer cancel()
 
 	var errs []error
-	for i := len(started) - 1; i >= 0; i-- {
-		c := started[i]
+	for _, c := range slices.Backward(started) {
 		if err := c.Stop(ctx); err != nil {
 			log.Error("stop failed", "component", c.Name(), "error", err)
 			errs = append(errs, fmt.Errorf("stop %s: %w", c.Name(), err))
