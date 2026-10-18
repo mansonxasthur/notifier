@@ -361,3 +361,70 @@ func TestInboxSwitchAndUnresolve(t *testing.T) {
 		}
 	})
 }
+
+func TestInboxDefer(t *testing.T) {
+	ctx := context.Background()
+	db := seed(t, 1)
+	store, id := postgres.NewInboxStore(db), deliveryID(t, db)
+	won, err := store.Claim(ctx, id, "sms-a", 3)
+	if err != nil || won.Result != domain.InboxClaimWon {
+		t.Fatalf("claim = %v, %v", won, err)
+	}
+	next := time.Now().Add(time.Hour)
+
+	if ok, err := store.Defer(ctx, id, won.ClaimCount+1, next); err != nil || ok {
+		t.Fatalf("stale defer = %v, %v, want false", ok, err)
+	}
+	if ok, err := store.Defer(ctx, id, won.ClaimCount, next); err != nil || !ok {
+		t.Fatalf("defer = %v, %v, want true", ok, err)
+	}
+	if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE state = 'WAITING_RETRY' AND retries = 0 AND deferrals = 1 AND claim_count = 1 AND failure_class IS NULL AND next_attempt_at > now()`); got != 1 {
+		t.Error("a deferral must wait without spending a retry, a failure class or a claim")
+	}
+	if ok, err := store.Defer(ctx, id, won.ClaimCount, next); err != nil || ok {
+		t.Fatalf("defer of a row no longer processing = %v, %v, want false", ok, err)
+	}
+
+	t.Run("claims after deferrals stay under the cap", func(t *testing.T) {
+		const maxClaims = 2
+		for i := range 5 {
+			if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET next_attempt_at = now() - interval '1 second'`); err != nil {
+				t.Fatal(err)
+			}
+			due, err := store.ClaimDue(ctx, 10, maxClaims)
+			if err != nil || len(due) != 1 {
+				t.Fatalf("round %d: ClaimDue = %v, %v; want the row", i, due, err)
+			}
+			if ok, err := store.Defer(ctx, id, due[0].ClaimCount, next); err != nil || !ok {
+				t.Fatalf("round %d: defer = %v, %v", i, ok, err)
+			}
+		}
+		if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE state = 'WAITING_RETRY'`); got != 1 {
+			t.Error("the row was killed by the claim cap although it was only deferred")
+		}
+	})
+
+	t.Run("real claims still reach the cap", func(t *testing.T) {
+		const maxClaims = 2
+		var last []domain.DueInbox
+		for range 6 {
+			if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET next_attempt_at = now() - interval '1 second' WHERE state = 'WAITING_RETRY'`); err != nil {
+				t.Fatal(err)
+			}
+			last, err = store.ClaimDue(ctx, 10, maxClaims)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(last) == 0 {
+				break
+			}
+			// The attempt fails instead of being deferred, so the claim is spent.
+			if ok, err := store.Park(ctx, id, last[0].ClaimCount, domain.FailureProvider, time.Now()); err != nil || !ok {
+				t.Fatalf("park = %v, %v", ok, err)
+			}
+		}
+		if len(last) != 0 || count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE state = 'DEAD'`) != 1 {
+			t.Error("claims spent on failed attempts must still end the row at the cap")
+		}
+	})
+}

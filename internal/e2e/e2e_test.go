@@ -166,6 +166,7 @@ func newStack(t *testing.T) *stack {
 	providers := provider.NewRegistry(cfg, nil)
 	attempt := sender.NewAttempt(postgres.NewDeliveryStore(db), inbox, providers, providers,
 		sender.NewBreakers(cfg.Sender.Breaker.Policy(), time.Now),
+		sender.NewProviderLimits(cfg.ProviderRateLimits(), time.Now),
 		sender.Routing{Order: cfg.ProviderOrder(), Policies: cfg.ProviderRetryPolicies()}, quiet)
 	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.MaxClaims, attempt.Send, quiet)
 	scan := sender.NewScan(inbox, attempt.Send, cfg.Sender.PollInterval, cfg.Sender.ScanBatch, cfg.Sender.MaxClaims, quiet)

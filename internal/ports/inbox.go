@@ -40,6 +40,11 @@ type InboxStore interface {
 	// Switch moves a row this sender holds to WAITING_RETRY on another provider with retries
 	// reset, due at next, after a failure of the given class. False means the claim is stale.
 	Switch(ctx context.Context, deliveryID int64, claimCount int, provider string, class domain.FailureClass, next time.Time) (bool, error)
+	// Defer puts a row this sender holds back in WAITING_RETRY, due at next, because the provider's
+	// rate limit had no token. It is not a failed attempt: retries and the failure class stay,
+	// and the deferral is counted apart so it does not count towards the claim cap. False means
+	// the claim is stale.
+	Defer(ctx context.Context, deliveryID int64, claimCount int, next time.Time) (bool, error)
 	// Unresolve ends a row this sender holds DEAD and its PENDING delivery UNRESOLVED, because
 	// the last provider's answer cannot be known. False means the claim is stale.
 	Unresolve(ctx context.Context, deliveryID int64, claimCount int, class domain.FailureClass) (bool, error)

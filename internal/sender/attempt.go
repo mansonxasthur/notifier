@@ -39,6 +39,7 @@ type Attempt struct {
 	providers  Providers
 	checker    ports.ProviderChecker
 	breakers   *Breakers
+	limits     *ProviderLimits
 	routing    Routing
 	log        *slog.Logger
 
@@ -48,12 +49,12 @@ type Attempt struct {
 	outage atomic.Bool
 }
 
-// NewAttempt returns an Attempt.
+// NewAttempt returns an Attempt. limits may be nil, which leaves every provider unlimited.
 func NewAttempt(deliveries ports.DeliveryStore, inbox ports.InboxStore, providers Providers, checker ports.ProviderChecker,
-	breakers *Breakers, routing Routing, log *slog.Logger) *Attempt {
+	breakers *Breakers, limits *ProviderLimits, routing Routing, log *slog.Logger) *Attempt {
 	return &Attempt{
 		deliveries: deliveries, inbox: inbox, providers: providers, checker: checker,
-		breakers: breakers, routing: routing, log: log,
+		breakers: breakers, limits: limits, routing: routing, log: log,
 		now:    time.Now,
 		jitter: rand.Float64, //nolint:gosec // jitter spreads retries, it is not a secret
 	}
@@ -110,6 +111,12 @@ func (a *Attempt) Send(ctx context.Context, c Claimed) error {
 		// An open breaker moves on without spending a retry.
 		return a.switchTo(settleCtx, run, domain.FailureProvider, "breaker_open")
 	}
+	// The token comes after the breaker, so a call the breaker refuses wastes none. A refusal
+	// here gives back the half-open probe slot the breaker just handed out.
+	if ok, wait := a.limits.Take(c.Provider); !ok {
+		a.breakers.Release(c.Provider)
+		return a.throttle(settleCtx, run, wait, d.ExpiresAt)
+	}
 
 	err = run.provider.Send(ctx, ports.SendRequest{DeliveryID: d.ID, Channel: d.Channel, Contact: d.Contact, Content: d.Content})
 	return a.settle(ctx, run, err)
@@ -143,6 +150,7 @@ const (
 	outcomeFailed     = "failed"
 	outcomeParked     = "parked"
 	outcomeSkipped    = "skipped"
+	outcomeThrottled  = "throttled"
 	outcomeSwitched   = "switched"
 	outcomeUnresolved = "unresolved"
 )
@@ -234,6 +242,28 @@ func (a *Attempt) retryOrMove(ctx context.Context, run attemptRun, class domain.
 	return a.fail(ctx, run, class, domain.ReasonProviderFailed, "error", sendErr)
 }
 
+// throttleSpread spreads the deferred rows of a spike over this window, so they do not all come
+// back at the instant the next token is free.
+const throttleSpread = 250 * time.Millisecond
+
+// throttle puts the row back on the same provider, due when its bucket will have a token, plus
+// jitter, but no later than the delivery's deadline. It is not a failure: no retry is spent, the breaker hears nothing, and the claim does
+// not count towards the cap. The deadline is checked again on the next attempt.
+func (a *Attempt) throttle(ctx context.Context, run attemptRun, wait time.Duration, expiresAt time.Time) error {
+	c := run.c
+	next := a.now().Add(wait + time.Duration(a.jitter()*float64(throttleSpread)))
+	// Never wait past the deadline: the row comes back at it and ends EXPIRED on time.
+	if !expiresAt.IsZero() && next.After(expiresAt) {
+		next = expiresAt
+	}
+	applied, err := a.inbox.Defer(ctx, c.DeliveryID, c.ClaimCount, next)
+	if err != nil {
+		return err
+	}
+	a.logAttempt(c, "", outcomeThrottled, applied, "next_attempt_at", next)
+	return nil
+}
+
 // switchTo moves the row to the channel's next provider, due now, with retries reset.
 func (a *Attempt) switchTo(ctx context.Context, run attemptRun, class domain.FailureClass, why string, extra ...any) error {
 	c := run.c
@@ -290,7 +320,12 @@ func (a *Attempt) logAttempt(c Claimed, class domain.FailureClass, outcome strin
 	attrs := append([]any{"delivery_id", c.DeliveryID, "provider", c.Provider, "claim", c.ClaimCount,
 		"failure_class", string(class), "outcome", outcome}, extra...)
 	level := slog.LevelInfo
-	if outcome != outcomeAccepted && outcome != outcomeSkipped {
+	switch outcome {
+	case outcomeAccepted, outcomeSkipped:
+	case outcomeThrottled:
+		// A spike defers thousands of rows; each is normal, so none is worth a warning.
+		level = slog.LevelDebug
+	default:
 		level = slog.LevelWarn
 	}
 	if !applied {

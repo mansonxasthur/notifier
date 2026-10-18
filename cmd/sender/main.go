@@ -28,6 +28,7 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	providers := provider.NewRegistry(cfg, nil)
 	attempt := sender.NewAttempt(postgres.NewDeliveryStore(db), inbox, providers, providers,
 		sender.NewBreakers(cfg.Sender.Breaker.Policy(), time.Now),
+		sender.NewProviderLimits(cfg.ProviderRateLimits(), time.Now),
 		sender.Routing{Order: cfg.ProviderOrder(), Policies: cfg.ProviderRetryPolicies()}, log)
 	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.MaxClaims, attempt.Send, log)
 	scan := sender.NewScan(inbox, attempt.Send, cfg.Sender.PollInterval, cfg.Sender.ScanBatch, cfg.Sender.MaxClaims, log)
