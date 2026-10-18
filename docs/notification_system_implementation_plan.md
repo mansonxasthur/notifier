@@ -112,15 +112,15 @@ Done when a message flows from request to `DELIVERED` through a simulated provid
 
 Goal: the system keeps its promises when providers misbehave. This phase holds most of the design's difficult decisions.
 
-- [ ] Error classification: message-level errors fail immediately with a reason, and provider-side failures and timeouts retry, with retry state in the inbox (WAITING\_RETRY, retries, next\_attempt\_at) and a sender scan for due rows
-- [ ] Per-provider retries from configuration: retry on the same provider with backoff and jitter up to its maximum, then switch to the other provider with `retries` reset, and end the delivery if that one is exhausted (`FAILED` at once for a 5xx, saving the `failure_reason`)
-- [ ] Timeout path: check the provider by `delivery_id` when it supports a lookup. Yes means `ACCEPTED`, no or not found retries the same provider, and a check that times out, returns a 5xx, or cannot be made moves to the other provider. The janitor uses the same check for an inbox row stuck in `PROCESSING`, and the check uses the provider's configured timeout
-- [ ] Per-provider circuit breaker, local to each sender in this build, with a short cache and a local state machine; an open breaker switches provider without spending retries (the shared Redis state is an enhancement)
-- [ ] Every provider's breaker open: `FAILED` with `NO_PROVIDER_AVAILABLE` and one critical log line
-- [ ] On the second provider the loop closes: a timeout with no usable answer ends the delivery `UNRESOLVED` and a 5xx ends it `FAILED`, with no return to the first provider
-- [ ] Expiry check before every send: deliveries never sent by their deadline become `FAILED` with the reason `EXPIRED`
+- [x] Error classification: message-level errors fail immediately with a reason, and provider-side failures and timeouts retry, with retry state in the inbox (WAITING\_RETRY, retries, next\_attempt\_at) and a sender scan for due rows
+- [x] Per-provider retries from configuration: retry on the same provider with backoff and jitter up to its maximum, then switch to the other provider with `retries` reset, and end the delivery if that one is exhausted (`FAILED` at once for a 5xx, saving the `failure_reason`)
+- [x] Timeout path: check the provider by `delivery_id` when it supports a lookup. Yes means `ACCEPTED`, no or not found retries the same provider, and a check that times out, returns a 5xx, or cannot be made moves to the other provider. The janitor uses the same check for an inbox row stuck in `PROCESSING`, and the check uses the provider's configured timeout
+- [x] Per-provider circuit breaker, local to each sender in this build, with a local state machine (a cache would only matter once the state is shared); an open breaker switches provider without spending retries (the shared Redis state is an enhancement)
+- [x] Every provider's breaker open: `FAILED` with `NO_PROVIDER_AVAILABLE` and one critical log line
+- [x] On the second provider the loop closes: a timeout with no usable answer ends the delivery `UNRESOLVED` and a 5xx ends it `FAILED`, with no return to the first provider
+- [x] Expiry check before every send: deliveries never sent by their deadline become `FAILED` with the reason `EXPIRED`
 - [ ] Enhancement, built only if time allows: the reconciler sweep for `ACCEPTED` deliveries past a per-channel threshold, using guarded transitions, with deliveries the provider never confirms ending `UNRESOLVED` at their deadline
-- [ ] Out of scope, documented only: events to the preference service for invalid contacts and opt-outs
+- [x] Out of scope, documented only: events to the preference service for invalid contacts and opt-outs
 
 Done when each simulated failure mode ends in the state the Decision Log describes, with a test per mode.
 

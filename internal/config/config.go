@@ -161,6 +161,22 @@ type Sender struct {
 	MaxClaims    int           `yaml:"max_claims"`
 	// Prefetch is how many unacknowledged messages a sender holds per queue.
 	Prefetch int `yaml:"prefetch"`
+	// ScanBatch is how many due retries one scan claims.
+	ScanBatch int     `yaml:"scan_batch"`
+	Breaker   Breaker `yaml:"breaker"`
+}
+
+// Breaker configures each sender's local circuit breaker, one per provider.
+type Breaker struct {
+	// FailureThreshold is how many consecutive failures open the breaker.
+	FailureThreshold int `yaml:"failure_threshold"`
+	// OpenFor is how long the breaker stays open before it lets one probe through.
+	OpenFor time.Duration `yaml:"open_for"`
+}
+
+// Policy converts the configured breaker to the domain type.
+func (b Breaker) Policy() domain.BreakerPolicy {
+	return domain.BreakerPolicy{FailureThreshold: b.FailureThreshold, OpenFor: b.OpenFor}
 }
 
 // Load reads the YAML file at path, applies environment overrides, and validates the result.
@@ -322,6 +338,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Sender.Prefetch <= 0 {
 		bad("sender.prefetch must be positive")
+	}
+	if c.Sender.ScanBatch <= 0 {
+		bad("sender.scan_batch must be positive")
+	}
+	if c.Sender.Breaker.FailureThreshold <= 0 {
+		bad("sender.breaker.failure_threshold must be positive")
+	}
+	if c.Sender.Breaker.OpenFor <= 0 {
+		bad("sender.breaker.open_for must be positive")
 	}
 
 	return errors.Join(errs...)
@@ -524,12 +549,24 @@ func (c *Config) ProviderChannels() map[string]domain.Channel {
 	return out
 }
 
-// ProviderBackoffs maps each provider name to its retry backoff policy.
-func (c *Config) ProviderBackoffs() map[string]domain.Backoff {
-	out := map[string]domain.Backoff{}
+// ProviderRetryPolicies maps each provider name to its retry policy.
+func (c *Config) ProviderRetryPolicies() map[string]domain.RetryPolicy {
+	out := map[string]domain.RetryPolicy{}
 	for _, cc := range c.Channels {
 		for _, p := range cc.Providers {
-			out[p.Name] = p.Backoff.Policy()
+			out[p.Name] = domain.RetryPolicy{MaxRetries: p.MaxRetries, Backoff: p.Backoff.Policy()}
+		}
+	}
+	return out
+}
+
+// ProviderOrder maps each channel to its provider names in try order. Validation requires the
+// primary to be listed first, so the list order is the order the sender tries them in.
+func (c *Config) ProviderOrder() map[domain.Channel][]string {
+	out := make(map[domain.Channel][]string, len(c.Channels))
+	for ch, cc := range c.Channels {
+		for _, p := range cc.Providers {
+			out[ch] = append(out[ch], p.Name)
 		}
 	}
 	return out

@@ -163,3 +163,201 @@ func TestInboxStuck(t *testing.T) {
 		}
 	})
 }
+
+// claimAndPark seeds n deliveries, claims each on sms-a and parks it due at the given offset.
+func claimAndPark(t *testing.T, db *postgres.Pool, store *postgres.InboxStore, due time.Duration) []int64 {
+	t.Helper()
+	ctx := context.Background()
+	rows, err := db.Pool().Query(ctx, `SELECT id FROM deliveries ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	for _, id := range ids {
+		if _, err := store.Claim(ctx, id, "sms-a", 20); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := store.Park(ctx, id, 1, domain.FailureProvider, time.Now().Add(due)); err != nil || !ok {
+			t.Fatalf("park = %v, %v", ok, err)
+		}
+	}
+	return ids
+}
+
+func TestInboxClaimHonoursDueTimeAndProvider(t *testing.T) {
+	ctx := context.Background()
+	db := seed(t, 1)
+	store, id := postgres.NewInboxStore(db), deliveryID(t, db)
+	claimAndPark(t, db, store, time.Hour)
+
+	if got, err := store.Claim(ctx, id, "sms-a", 20); err != nil || got.Result != domain.InboxClaimDuplicate {
+		t.Fatalf("claim before due = %v, %v, want duplicate", got, err)
+	}
+	// A failover moved the row to another provider; the next claim must see it.
+	if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET provider = 'sms-b', next_attempt_at = now() - interval '1 second', retries = 0`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Claim(ctx, id, "sms-a", 20)
+	if err != nil || got.Result != domain.InboxClaimWon || got.Provider != "sms-b" || got.ClaimCount != 2 {
+		t.Fatalf("claim when due = %+v, %v, want won on sms-b with claim_count 2", got, err)
+	}
+}
+
+func TestInboxClaimDue(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("claims only rows that are due, oldest first, up to the limit", func(t *testing.T) {
+		db := seed(t, 3)
+		store := postgres.NewInboxStore(db)
+		ids := claimAndPark(t, db, store, time.Hour)
+		for i, id := range ids[:2] {
+			if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET next_attempt_at = now() - make_interval(secs => $2) WHERE delivery_id = $1`,
+				id, float64(10-i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		got, err := store.ClaimDue(ctx, 1, 20)
+		if err != nil || len(got) != 1 || got[0].DeliveryID != ids[0] {
+			t.Fatalf("first scan = %+v, %v, want only delivery %d", got, err, ids[0])
+		}
+		if got[0].ClaimCount != 2 || got[0].Provider != "sms-a" || got[0].Retries != 1 {
+			t.Errorf("claim = %+v, want claim_count 2, sms-a, retries 1", got[0])
+		}
+		got, err = store.ClaimDue(ctx, 10, 20)
+		if err != nil || len(got) != 1 || got[0].DeliveryID != ids[1] {
+			t.Fatalf("second scan = %+v, %v, want only delivery %d", got, err, ids[1])
+		}
+		if n := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE state = 'PROCESSING'`); n != 2 {
+			t.Errorf("processing rows = %d, want 2", n)
+		}
+		if got, err = store.ClaimDue(ctx, 10, 20); err != nil || len(got) != 0 {
+			t.Errorf("third scan = %+v, %v, want nothing (the last row is not due)", got, err)
+		}
+	})
+
+	t.Run("concurrent scans never claim the same row", func(t *testing.T) {
+		db := seed(t, 30)
+		store := postgres.NewInboxStore(db)
+		claimAndPark(t, db, store, -time.Second)
+
+		var mu sync.Mutex
+		seen := map[int64]int{}
+		var wg sync.WaitGroup
+		for range 6 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				got, err := store.ClaimDue(ctx, 10, 20)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				for _, d := range got {
+					seen[d.DeliveryID]++
+				}
+			}()
+		}
+		wg.Wait()
+		for id, n := range seen {
+			if n != 1 {
+				t.Errorf("delivery %d claimed %d times", id, n)
+			}
+		}
+		if len(seen) != 30 {
+			t.Errorf("claimed %d rows, want all 30", len(seen))
+		}
+	})
+
+	t.Run("a row over the claim cap is failed, not returned", func(t *testing.T) {
+		db := seed(t, 1)
+		store := postgres.NewInboxStore(db)
+		claimAndPark(t, db, store, -time.Second)
+
+		got, err := store.ClaimDue(ctx, 10, 1)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("scan = %+v, %v, want nothing", got, err)
+		}
+		if n := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE state = 'DEAD' AND failure_reason = 'MAX_CLAIMS_EXCEEDED'`); n != 1 {
+			t.Error("inbox row should be DEAD with the reason")
+		}
+		if n := count(t, db.Pool(), `SELECT count(*) FROM deliveries WHERE state = 'FAILED' AND failure_reason = 'MAX_CLAIMS_EXCEEDED'`); n != 1 {
+			t.Error("delivery should be FAILED")
+		}
+	})
+}
+
+func TestInboxSwitchAndUnresolve(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("switch moves the row to another provider with retries reset, fenced by claim_count", func(t *testing.T) {
+		db := seed(t, 1)
+		store, id := postgres.NewInboxStore(db), deliveryID(t, db)
+		claimAndPark(t, db, store, -time.Second)
+		due, err := store.ClaimDue(ctx, 1, 20)
+		if err != nil || len(due) != 1 {
+			t.Fatalf("scan = %+v, %v", due, err)
+		}
+
+		if ok, err := store.Switch(ctx, id, due[0].ClaimCount+1, "sms-b", domain.FailureProvider, time.Now()); err != nil || ok {
+			t.Errorf("stale switch = %v, %v, want false", ok, err)
+		}
+		if ok, err := store.Switch(ctx, id, due[0].ClaimCount, "sms-b", domain.FailureTimeout, time.Now().Add(-time.Second)); err != nil || !ok {
+			t.Fatalf("switch = %v, %v, want true", ok, err)
+		}
+		if n := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE state = 'WAITING_RETRY' AND provider = 'sms-b' AND retries = 0 AND failure_class = 'timeout'`); n != 1 {
+			t.Error("row should wait on sms-b with retries reset")
+		}
+		got, err := store.ClaimDue(ctx, 1, 20)
+		if err != nil || len(got) != 1 || got[0].Provider != "sms-b" || got[0].Retries != 0 {
+			t.Errorf("next scan = %+v, %v, want the row on sms-b with retries 0", got, err)
+		}
+	})
+
+	t.Run("unresolve ends the row and the pending delivery, fenced by claim_count", func(t *testing.T) {
+		db := seed(t, 1)
+		store, id := postgres.NewInboxStore(db), deliveryID(t, db)
+		if _, err := store.Claim(ctx, id, "sms-b", 20); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := store.Unresolve(ctx, id, 9, domain.FailureTimeout); err != nil || ok {
+			t.Errorf("stale unresolve = %v, %v, want false", ok, err)
+		}
+		if ok, err := store.Unresolve(ctx, id, 1, domain.FailureTimeout); err != nil || !ok {
+			t.Fatalf("unresolve = %v, %v, want true", ok, err)
+		}
+		if n := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE state = 'DEAD' AND failure_class = 'timeout'`); n != 1 {
+			t.Error("inbox row should be DEAD")
+		}
+		if n := count(t, db.Pool(), `SELECT count(*) FROM deliveries WHERE state = 'UNRESOLVED'`); n != 1 {
+			t.Error("delivery should be UNRESOLVED")
+		}
+	})
+
+	t.Run("unresolve leaves a delivery a webhook already finished", func(t *testing.T) {
+		db := seed(t, 1)
+		store, id := postgres.NewInboxStore(db), deliveryID(t, db)
+		if _, err := store.Claim(ctx, id, "sms-b", 20); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Pool().Exec(ctx, `UPDATE deliveries SET state = 'DELIVERED'`); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := store.Unresolve(ctx, id, 1, domain.FailureTimeout); err != nil || !ok {
+			t.Fatalf("unresolve = %v, %v, want true", ok, err)
+		}
+		if n := count(t, db.Pool(), `SELECT count(*) FROM deliveries WHERE state = 'DELIVERED'`); n != 1 {
+			t.Error("a DELIVERED delivery must stay DELIVERED")
+		}
+	})
+}

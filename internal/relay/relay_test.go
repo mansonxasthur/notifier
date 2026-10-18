@@ -191,10 +191,22 @@ func TestKilledRelayIsRecovered(t *testing.T) {
 	}
 }
 
+// answer is what a fake provider says to a status lookup.
+type answer struct {
+	res ports.CheckResult
+	err error
+}
+
+type answers map[int64]answer
+
+func (a answers) Check(_ context.Context, _ string, id int64) (ports.CheckResult, error) {
+	return a[id].res, a[id].err
+}
+
 func TestJanitorRecoversStuckInbox(t *testing.T) {
 	ctx := context.Background()
 	db := startDB(t)
-	seed(t, db, 2)
+	seed(t, db, 5)
 	inbox := postgres.NewInboxStore(db)
 
 	var ids []int64
@@ -210,8 +222,13 @@ func TestJanitorRecoversStuckInbox(t *testing.T) {
 		ids = append(ids, id)
 	}
 	rows.Close()
-	for _, id := range ids {
-		if _, err := inbox.Claim(ctx, id, "sms-a", 5); err != nil {
+	// The first four were stuck on the primary; the last on the fallback.
+	for i, id := range ids {
+		provider := "sms-a"
+		if i == 4 {
+			provider = "sms-b"
+		}
+		if _, err := inbox.Claim(ctx, id, provider, 5); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -219,21 +236,42 @@ func TestJanitorRecoversStuckInbox(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	checker := fakeChecker{ids[0]: ports.CheckAccepted} // the provider has the first one only
+	checker := answers{
+		ids[0]: {res: ports.CheckAccepted},
+		ids[1]: {res: ports.CheckNotFound},
+		ids[2]: {res: ports.CheckUnknown},
+		ids[3]: {err: errors.New("lookup failed")},
+		ids[4]: {res: ports.CheckUnknown},
+	}
 	j := relay.NewJanitor(postgres.NewOutboxStore(db), inbox, checker, relay.JanitorConfig{
 		Interval: time.Hour, OutboxStuckAfter: time.Hour, InboxStuckMargin: time.Second, Backoff: backoff,
-		Providers: []relay.Provider{{Name: "sms-a", Timeout: time.Second}},
+		Providers: []relay.Provider{
+			{Name: "sms-a", Timeout: time.Second, Next: "sms-b", Backoff: backoff},
+			{Name: "sms-b", Timeout: time.Second, Backoff: backoff},
+		},
 	}, quiet)
 	j.SweepInbox(ctx)
 
-	if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE delivery_id = $1 AND state = 'DONE'`, ids[0]); got != 1 {
-		t.Error("a message the provider confirmed must end DONE")
+	type want struct{ inbox, provider, delivery string }
+	for i, w := range []want{
+		{"DONE", "sms-a", "ACCEPTED"},         // the provider has it
+		{"WAITING_RETRY", "sms-a", "PENDING"}, // the provider does not: same provider again
+		{"WAITING_RETRY", "sms-b", "PENDING"}, // no answer: on to the fallback
+		{"WAITING_RETRY", "sms-b", "PENDING"}, // the lookup failed: the same
+		{"DEAD", "sms-b", "UNRESOLVED"},       // no answer from the last provider
+	} {
+		var got want
+		if err := db.Pool().QueryRow(ctx, `
+			SELECT i.state, i.provider, d.state FROM inbox i JOIN deliveries d ON d.id = i.delivery_id
+			WHERE d.id = $1`, ids[i]).Scan(&got.inbox, &got.provider, &got.delivery); err != nil {
+			t.Fatal(err)
+		}
+		if got != w {
+			t.Errorf("delivery %d ended %+v, want %+v", i, got, w)
+		}
 	}
-	if got := count(t, db.Pool(), `SELECT count(*) FROM deliveries WHERE id = $1 AND state = 'ACCEPTED'`, ids[0]); got != 1 {
-		t.Error("a message the provider confirmed must be ACCEPTED")
-	}
-	if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE delivery_id = $1 AND state = 'WAITING_RETRY' AND next_attempt_at IS NOT NULL`, ids[1]); got != 1 {
-		t.Error("a message the provider does not know must wait for a retry")
+	if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE provider = 'sms-b' AND state = 'WAITING_RETRY' AND retries = 0 AND next_attempt_at IS NOT NULL`); got != 2 {
+		t.Errorf("switched rows with retries reset = %d, want 2", got)
 	}
 }
 
@@ -276,10 +314,12 @@ func maxInt(a, b int) int {
 func startSender(t *testing.T, db *postgres.Pool, mq *rabbitmq.Conn) *countingSend {
 	t.Helper()
 	cs := &countingSend{calls: map[int64]int{}}
-	intake := sender.NewIntake(postgres.NewInboxStore(db), map[domain.Channel]string{
+	inbox := postgres.NewInboxStore(db)
+	intake := sender.NewIntake(inbox, map[domain.Channel]string{
 		domain.ChannelEmail: "email-a", domain.ChannelSMS: "sms-a", domain.ChannelWhatsApp: "whatsapp-a",
 	}, 5, cs.send, quiet)
-	start(t, sender.New(rabbitmq.NewConsumer(mq, 10, quiet), intake))
+	scan := sender.NewScan(inbox, cs.send, time.Hour, 10, 5, quiet) // nothing here parks a row
+	start(t, sender.New(rabbitmq.NewConsumer(mq, 10, quiet), intake, scan))
 	return cs
 }
 

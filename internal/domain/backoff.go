@@ -26,3 +26,10 @@ func (b Backoff) Delay(attempts int, unit float64) time.Duration {
 	d *= 1 + b.Jitter*(2*unit-1)
 	return time.Duration(d)
 }
+
+// RetryPolicy is how a provider is retried before the sender moves on to the next one.
+type RetryPolicy struct {
+	// MaxRetries is how many retries follow the first attempt on the provider.
+	MaxRetries int
+	Backoff    Backoff
+}

@@ -124,3 +124,10 @@ sender:
   max_claims: 20
   # Unacknowledged messages a sender holds per queue.
   prefetch: 50
+  # Due retries claimed per scan.
+  scan_batch: 50
+  # One local breaker per provider: it opens after this many consecutive failures and lets
+  # one probe through once open_for has passed.
+  breaker:
+    failure_threshold: 5
+    open_for: 10s

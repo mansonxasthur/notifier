@@ -17,6 +17,7 @@ func TestFailureReasonValid(t *testing.T) {
 	for _, r := range []FailureReason{
 		ReasonMaxAttemptsExceeded, ReasonMaxClaimsExceeded, ReasonPublishFailed,
 		ReasonProviderRejected, ReasonProviderFailed, ReasonBounced, ReasonInvalidDestination,
+		ReasonExpired, ReasonNoProviderAvailable,
 	} {
 		if !r.Valid() {
 			t.Errorf("%s should be valid", r)

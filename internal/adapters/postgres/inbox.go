@@ -26,7 +26,9 @@ INSERT INTO inbox (delivery_id, state, provider, claim_count)
 VALUES ($1, $2, $3, 1)
 ON CONFLICT (delivery_id) DO NOTHING`
 
-const lockInbox = `SELECT state, claim_count, retries FROM inbox WHERE delivery_id = $1 FOR UPDATE`
+const lockInbox = `
+SELECT state, claim_count, retries, provider, coalesce(next_attempt_at <= now(), true)
+FROM inbox WHERE delivery_id = $1 FOR UPDATE`
 
 const reclaimInbox = `
 UPDATE inbox SET state = $2, claim_count = claim_count + 1, last_try = now()
@@ -52,7 +54,7 @@ func (s *InboxStore) Claim(ctx context.Context, deliveryID int64, provider strin
 	if err != nil {
 		return domain.InboxClaim{}, fmt.Errorf("claim inbox: %w", err)
 	}
-	claim := domain.InboxClaim{Result: domain.InboxClaimWon, ClaimCount: 1}
+	claim := domain.InboxClaim{Result: domain.InboxClaimWon, ClaimCount: 1, Provider: provider}
 	if tag.RowsAffected() == 0 {
 		claim, err = claimExisting(ctx, tx, deliveryID, maxClaims)
 		if err != nil {
@@ -66,30 +68,86 @@ func (s *InboxStore) Claim(ctx context.Context, deliveryID int64, provider strin
 }
 
 // claimExisting handles a message whose inbox row already exists. Only a row waiting for a
-// retry can be claimed again; the row lock makes concurrent senders take turns.
+// retry that is due can be claimed again; the row lock makes concurrent senders take turns.
 func claimExisting(ctx context.Context, tx pgx.Tx, deliveryID int64, maxClaims int) (domain.InboxClaim, error) {
 	var state domain.InboxState
 	var claims, retries int
-	if err := tx.QueryRow(ctx, lockInbox, deliveryID).Scan(&state, &claims, &retries); err != nil {
+	var provider string
+	var due bool
+	if err := tx.QueryRow(ctx, lockInbox, deliveryID).Scan(&state, &claims, &retries, &provider, &due); err != nil {
 		return domain.InboxClaim{}, err
 	}
-	if state != domain.InboxWaitingRetry {
+	if state != domain.InboxWaitingRetry || !due {
 		return domain.InboxClaim{Result: domain.InboxClaimDuplicate}, nil
 	}
-	if claims >= maxClaims {
-		if _, err := tx.Exec(ctx, deadInbox, deliveryID, domain.InboxDead, domain.ReasonMaxClaimsExceeded); err != nil {
-			return domain.InboxClaim{}, err
-		}
-		if _, err := tx.Exec(ctx, failDelivery, deliveryID, domain.DeliveryFailed, domain.DeliveryPending,
-			domain.ReasonMaxClaimsExceeded); err != nil {
-			return domain.InboxClaim{}, err
-		}
-		return domain.InboxClaim{Result: domain.InboxClaimDead}, nil
-	}
-	if _, err := tx.Exec(ctx, reclaimInbox, deliveryID, domain.InboxProcessing); err != nil {
+	won, err := reclaim(ctx, tx, deliveryID, claims, maxClaims)
+	if err != nil {
 		return domain.InboxClaim{}, err
 	}
-	return domain.InboxClaim{Result: domain.InboxClaimWon, ClaimCount: claims + 1, Retries: retries}, nil
+	if !won {
+		return domain.InboxClaim{Result: domain.InboxClaimDead}, nil
+	}
+	return domain.InboxClaim{Result: domain.InboxClaimWon, ClaimCount: claims + 1, Retries: retries, Provider: provider}, nil
+}
+
+// reclaim takes a locked WAITING_RETRY row for a sender, or, if it has used its claims,
+// ends it DEAD and fails its delivery. It reports whether the row was taken.
+func reclaim(ctx context.Context, tx pgx.Tx, deliveryID int64, claims, maxClaims int) (bool, error) {
+	if claims >= maxClaims {
+		if _, err := tx.Exec(ctx, deadInbox, deliveryID, domain.InboxDead, domain.ReasonMaxClaimsExceeded); err != nil {
+			return false, err
+		}
+		_, err := tx.Exec(ctx, failDelivery, deliveryID, domain.DeliveryFailed, domain.DeliveryPending,
+			domain.ReasonMaxClaimsExceeded)
+		return false, err
+	}
+	_, err := tx.Exec(ctx, reclaimInbox, deliveryID, domain.InboxProcessing)
+	return err == nil, err
+}
+
+const dueInbox = `
+SELECT delivery_id, provider, claim_count, retries FROM inbox
+WHERE state = $1 AND next_attempt_at <= now()
+ORDER BY next_attempt_at
+LIMIT $2
+FOR UPDATE SKIP LOCKED`
+
+// ClaimDue implements ports.InboxStore.
+func (s *InboxStore) ClaimDue(ctx context.Context, limit int, maxClaims int) ([]domain.DueInbox, error) {
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("claim due inbox: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx, dueInbox, domain.InboxWaitingRetry, limit)
+	if err != nil {
+		return nil, fmt.Errorf("claim due inbox: %w", err)
+	}
+	locked, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (domain.DueInbox, error) {
+		var d domain.DueInbox
+		err := r.Scan(&d.DeliveryID, &d.Provider, &d.ClaimCount, &d.Retries)
+		return d, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("claim due inbox: %w", err)
+	}
+
+	claimed := make([]domain.DueInbox, 0, len(locked))
+	for _, d := range locked {
+		won, err := reclaim(ctx, tx, d.DeliveryID, d.ClaimCount, maxClaims)
+		if err != nil {
+			return nil, fmt.Errorf("claim due inbox: %w", err)
+		}
+		if won {
+			d.ClaimCount++
+			claimed = append(claimed, d)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("claim due inbox: %w", err)
+	}
+	return claimed, nil
 }
 
 const listStuckInbox = `
@@ -199,4 +257,37 @@ func (s *InboxStore) Park(ctx context.Context, deliveryID int64, claimCount int,
 		return false, fmt.Errorf("park inbox: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+const switchInbox = `
+UPDATE inbox SET state = $3, provider = $5, retries = 0, failure_class = $6, next_attempt_at = $7, last_try = now()
+WHERE delivery_id = $1 AND state = $4 AND claim_count = $2`
+
+// Switch implements ports.InboxStore.
+func (s *InboxStore) Switch(ctx context.Context, deliveryID int64, claimCount int, provider string, class domain.FailureClass, next time.Time) (bool, error) {
+	tag, err := s.db.Pool().Exec(ctx, switchInbox, deliveryID, claimCount,
+		domain.InboxWaitingRetry, domain.InboxProcessing, provider, class, next)
+	if err != nil {
+		return false, fmt.Errorf("switch inbox provider: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+const unresolveInbox = `
+WITH dead AS (
+  UPDATE inbox SET state = $3, failure_class = $5, last_try = now()
+  WHERE delivery_id = $1 AND state = $4 AND claim_count = $2
+  RETURNING delivery_id
+), unresolved AS (
+  UPDATE deliveries d SET state = $6, updated_at = now()
+  FROM dead WHERE d.id = dead.delivery_id AND d.state = $7
+)
+SELECT true FROM dead`
+
+// Unresolve implements ports.InboxStore. Like Fail, the delivery only moves out of PENDING.
+func (s *InboxStore) Unresolve(ctx context.Context, deliveryID int64, claimCount int, class domain.FailureClass) (bool, error) {
+	var done bool
+	err := s.db.Pool().QueryRow(ctx, unresolveInbox, deliveryID, claimCount,
+		domain.InboxDead, domain.InboxProcessing, class, domain.DeliveryUnresolved, domain.DeliveryPending).Scan(&done)
+	return scanApplied(err, done, "unresolve inbox")
 }

@@ -108,6 +108,9 @@ func newStack(t *testing.T) *stack {
 		cfg.SimProvider.Weights[s] = 1
 	}
 	cfg.SimProvider.WebhookDelay = 100 * time.Millisecond
+	// The breaker has its own tests. Here it must not open, or a run of failures would change
+	// which provider a delivery uses and the oracle below could not predict it.
+	cfg.Sender.Breaker.FailureThreshold = 1_000_000
 
 	db := postgres.New(pgtest.NewMigratedDB(t))
 	if err := db.Start(ctx); err != nil {
@@ -158,9 +161,13 @@ func newStack(t *testing.T) *stack {
 		relay.Config{PollInterval: 10 * time.Millisecond, BatchSize: 100, Workers: 2, MaxAttempts: 10, Backoff: backoff}, quiet))
 
 	inbox := postgres.NewInboxStore(db)
-	attempt := sender.NewAttempt(postgres.NewDeliveryStore(db), inbox, provider.NewRegistry(cfg, nil), cfg.ProviderBackoffs(), quiet)
+	providers := provider.NewRegistry(cfg, nil)
+	attempt := sender.NewAttempt(postgres.NewDeliveryStore(db), inbox, providers, providers,
+		sender.NewBreakers(cfg.Sender.Breaker.Policy(), time.Now),
+		sender.Routing{Order: cfg.ProviderOrder(), Policies: cfg.ProviderRetryPolicies()}, quiet)
 	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.MaxClaims, attempt.Send, quiet)
-	start(t, sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, quiet), intake))
+	scan := sender.NewScan(inbox, attempt.Send, cfg.Sender.PollInterval, cfg.Sender.ScanBatch, cfg.Sender.MaxClaims, quiet)
+	start(t, sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, quiet), intake, scan))
 
 	return &stack{db: db, apiURL: apiURL, simURL: simURL}
 }
@@ -189,8 +196,8 @@ func (s *stack) submit(t *testing.T) int {
 	return out.Accepted
 }
 
-// decisions reads what the simulator decided, by delivery id.
-func (s *stack) decisions(t *testing.T) map[int64]domain.Scenario {
+// decisions reads what the simulator decided, by delivery id and then provider.
+func (s *stack) decisions(t *testing.T) map[int64]map[string]domain.Scenario {
 	t.Helper()
 	status, body := do(t, http.MethodGet, s.simURL+"/scenarios", nil)
 	if status != http.StatusOK {
@@ -202,9 +209,12 @@ func (s *stack) decisions(t *testing.T) map[int64]domain.Scenario {
 	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatal(err)
 	}
-	m := map[int64]domain.Scenario{}
+	m := map[int64]map[string]domain.Scenario{}
 	for _, e := range out.Entries {
-		m[e.DeliveryID] = e.Scenario
+		if m[e.DeliveryID] == nil {
+			m[e.DeliveryID] = map[string]domain.Scenario{}
+		}
+		m[e.DeliveryID][e.Provider] = e.Scenario
 	}
 	return m
 }
@@ -234,22 +244,74 @@ func (s *stack) rows(t *testing.T) map[int64]row {
 	return out
 }
 
-// expected is the final state each scenario must lead to in Phase 4. Phase 5 adds the retry
-// scan and failover, which move the parked rows on; these expectations change with it.
-var expected = map[domain.Scenario]row{
-	domain.ScenarioSucceed:       {state: "DELIVERED", inbox: "DONE"},
-	domain.ScenarioSlow:          {state: "DELIVERED", inbox: "DONE"},
-	domain.ScenarioLateFailure:   {state: "FAILED", reason: "BOUNCED", inbox: "DONE"},
-	domain.ScenarioFailPermanent: {state: "FAILED", reason: "PROVIDER_REJECTED", inbox: "DEAD", class: "message"},
-	// A transient failure is parked for the retry scan, which Phase 5 adds.
-	domain.ScenarioFailTransient: {state: "PENDING", inbox: "WAITING_RETRY", class: "provider"},
-	// The call timed out and was parked, then the provider's own webhook finished it.
-	domain.ScenarioTimeout: {state: "DELIVERED", inbox: "WAITING_RETRY", class: "timeout"},
+// outcome is where one provider's scenario leaves a delivery. moveOn means the sender gives
+// up on this provider and tries the next one. last is whether this is the channel's last
+// provider, and lookup whether it answers status lookups.
+func outcome(sc domain.Scenario, last, lookup bool) (r row, moveOn bool) {
+	switch sc {
+	case domain.ScenarioSucceed, domain.ScenarioSlow:
+		return row{state: "DELIVERED", inbox: "DONE"}, false
+	case domain.ScenarioLateFailure:
+		return row{state: "FAILED", reason: "BOUNCED", inbox: "DONE"}, false
+	case domain.ScenarioFailPermanent:
+		return row{state: "FAILED", reason: "PROVIDER_REJECTED", inbox: "DEAD", class: "message"}, false
+	case domain.ScenarioFailTransient:
+		// Retried on the same provider (the scenario replays), then the next provider; on the
+		// last one the delivery ends.
+		if !last {
+			return row{}, true
+		}
+		return row{state: "FAILED", reason: "PROVIDER_FAILED", inbox: "DEAD", class: "provider"}, false
+	case domain.ScenarioTimeout:
+		// The provider holds the message and says so when asked, and its own webhook finishes it.
+		if lookup {
+			return row{state: "DELIVERED", inbox: "DONE"}, false
+		}
+		if !last {
+			return row{}, true
+		}
+		// No answer from the last provider leaves the delivery UNRESOLVED until its late
+		// webhook settles it.
+		return row{state: "DELIVERED", inbox: "DEAD", class: "timeout"}, false
+	}
+	panic("unknown scenario " + string(sc))
+}
+
+// expected is the final row for a delivery given what the simulator decided at its primary
+// provider and, if the sender moved on, at the fallback. ok is false when the decisions
+// contradict the path the sender must have taken.
+func expected(primary string, d map[string]domain.Scenario) (r row, usedFallback, ok bool) {
+	fallback := strings.TrimSuffix(primary, "-a") + "-b"
+	pr, move := outcome(d[primary], false, true)
+	if !move {
+		_, touched := d[fallback]
+		return pr, false, !touched
+	}
+	fb, seen := d[fallback]
+	if !seen {
+		return row{}, true, false
+	}
+	r, _ = outcome(fb, true, false)
+	if r.inbox == "DONE" {
+		r.class = "provider" // the switch recorded why the primary was given up on
+	}
+	return r, true, true
+}
+
+// primaryOf returns the provider a delivery was first sent to: the "-a" one.
+func primaryOf(d map[string]domain.Scenario) string {
+	for name := range d {
+		if strings.HasSuffix(name, "-a") {
+			return name
+		}
+	}
+	return ""
 }
 
 // A message flows from the request to its final state through the simulated provider, in
-// every scenario, including the late failure webhook. The simulator's own record of what it
-// decided is the oracle: every delivery must end where its scenario says.
+// every scenario, including retries, failover to the second provider and late webhooks. The
+// simulator's own record of what it decided, at each provider the sender used, is the
+// oracle: every delivery must end where those decisions say.
 func TestRequestToFinalStateThroughTheSimulator(t *testing.T) {
 	s := newStack(t)
 	want := s.submit(t)
@@ -258,20 +320,20 @@ func TestRequestToFinalStateThroughTheSimulator(t *testing.T) {
 	}
 
 	var rows map[int64]row
-	var decided map[int64]domain.Scenario
+	var decided map[int64]map[string]domain.Scenario
 	settled := func() bool {
 		decided, rows = s.decisions(t), s.rows(t)
 		if len(decided) != want || len(rows) != want {
 			return false
 		}
-		for id, sc := range decided {
-			if rows[id] != expected[sc] {
+		for id, d := range decided {
+			if r, _, ok := expected(primaryOf(d), d); !ok || rows[id] != r {
 				return false
 			}
 		}
 		return true
 	}
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(90 * time.Second)
 	for !settled() {
 		if time.Now().After(deadline) {
 			break
@@ -279,16 +341,36 @@ func TestRequestToFinalStateThroughTheSimulator(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	seen := map[domain.Scenario]int{}
-	for id, sc := range decided {
-		seen[sc]++
-		if rows[id] != expected[sc] {
-			t.Errorf("delivery %d (%s) ended %+v, want %+v", id, sc, rows[id], expected[sc])
+	primaries := map[domain.Scenario]int{}
+	fallbacks := map[domain.Scenario]int{}
+	holding := 0
+	for id, d := range decided {
+		primary := primaryOf(d)
+		primaries[d[primary]]++
+		r, usedFallback, ok := expected(primary, d)
+		if !ok {
+			t.Errorf("delivery %d: decisions %v do not fit any path the sender can take", id, d)
+			continue
+		}
+		if usedFallback {
+			fallbacks[d[strings.TrimSuffix(primary, "-a")+"-b"]]++
+		}
+		if rows[id] != r {
+			t.Errorf("delivery %d (%v) ended %+v, want %+v", id, d, rows[id], r)
+		}
+		for _, sc := range d {
+			switch sc {
+			case domain.ScenarioSucceed, domain.ScenarioSlow, domain.ScenarioTimeout, domain.ScenarioLateFailure:
+				holding++
+			}
 		}
 	}
 	for _, sc := range domain.Scenarios() {
-		if seen[sc] == 0 {
-			t.Errorf("scenario %s was never drawn; the run proves nothing about it", sc)
+		if primaries[sc] == 0 {
+			t.Errorf("scenario %s was never drawn at a primary; the run proves nothing about it", sc)
+		}
+		if fallbacks[sc] == 0 {
+			t.Errorf("scenario %s was never drawn at a fallback; the run proves nothing about failover", sc)
 		}
 	}
 	if len(decided) != want {
@@ -301,9 +383,8 @@ func TestRequestToFinalStateThroughTheSimulator(t *testing.T) {
 		`SELECT count(*), count(*) FILTER (WHERE applied) FROM webhook_events`).Scan(&events, &applied); err != nil {
 		t.Fatal(err)
 	}
-	webhooks := seen[domain.ScenarioSucceed] + seen[domain.ScenarioSlow] + seen[domain.ScenarioTimeout] + seen[domain.ScenarioLateFailure]
-	if events != webhooks {
-		t.Errorf("webhook_events = %d, want %d: one per delivery the provider accepted", events, webhooks)
+	if events != holding {
+		t.Errorf("webhook_events = %d, want %d: one per provider that took the message", events, holding)
 	}
 	if applied != events {
 		t.Errorf("applied = %d of %d: each delivery gets one webhook, so each moves it", applied, events)
