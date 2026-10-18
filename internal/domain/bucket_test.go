@@ -18,6 +18,7 @@ func TestBucketPolicyValidate(t *testing.T) {
 		{"fractional rate", BucketPolicy{Rate: 0.5, Burst: 1}, false},
 		{"zero rate", BucketPolicy{Rate: 0, Burst: 20}, true},
 		{"negative rate", BucketPolicy{Rate: -1, Burst: 20}, true},
+		{"rate too low to refill a token in a day", BucketPolicy{Rate: 1e-9, Burst: 1}, true},
 		{"zero burst", BucketPolicy{Rate: 10, Burst: 0}, true},
 	}
 	for _, tc := range tests {

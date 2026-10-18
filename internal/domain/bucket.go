@@ -19,6 +19,9 @@ func (p BucketPolicy) Validate() error {
 	if !(p.Rate > 0) || math.IsInf(p.Rate, 0) {
 		return errors.New("rate must be a positive number")
 	}
+	if p.Rate < 1/MaxWait.Seconds() {
+		return errors.New("rate is too low: one token must refill within MaxWait")
+	}
 	if p.Burst < 1 {
 		return errors.New("burst must be at least 1")
 	}
