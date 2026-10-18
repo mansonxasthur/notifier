@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Phase 1 (foundations) is built: the three entry points plus a `simprovider` stub start, connect, and shut down cleanly; migrations and the compose stack exist. Accept path, relay, sender and resilience (Phases 2-6) are not built yet. The design lives in `docs/` and is the source of truth:
+Phases 1-3 are built: foundations, the accept path, and the relay with its queue and janitor (the sender only claims inbox rows and logs; the provider call is Phase 4). Sender and simulated provider, resilience and limits (Phases 4-6) are not built yet. The design lives in `docs/` and is the source of truth:
 
 - `docs/notification_system_design_decision_log.md` — every design decision and its rationale. **Record any change to a decision here first**, before changing code.
 - `docs/notification_system_implementation_plan.md` — 8 phases (foundations → accept path → relay/queue/janitor → sender + simulated provider → resilience → limits → verification → deliverables) with checklists and "done when" criteria. Build in that order, as thin vertical slices.

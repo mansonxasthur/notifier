@@ -18,6 +18,13 @@ var _ ports.Consumer = (*Consumer)(nil)
 // reconnectDelay is the pause before consuming again after the broker dropped us.
 const reconnectDelay = time.Second
 
+const (
+	// requeueDelay slows redelivery of a failing message, so an outage is not a hot loop.
+	requeueDelay = time.Second
+	// handlerTimeout bounds one handler call, since it no longer sees the consumer's cancellation.
+	handlerTimeout = 30 * time.Second
+)
+
 // Consumer reads delivery IDs with manual acknowledgements.
 type Consumer struct {
 	conn     *Conn
@@ -92,8 +99,15 @@ func (c *Consumer) handle(ctx context.Context, ch domain.Channel, h ports.Handle
 		_ = msg.Reject(false)
 		return
 	}
-	if err := h(ctx, id); err != nil {
+	// In-flight messages finish when the consumer stops, so the handler is not cancelled with it.
+	hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handlerTimeout)
+	defer cancel()
+	if err := h(hctx, id); err != nil {
 		c.log.Warn("handler failed, requeueing", "channel", ch, "delivery_id", id, "error", err)
+		select {
+		case <-ctx.Done():
+		case <-time.After(requeueDelay):
+		}
 		_ = msg.Nack(false, true)
 		return
 	}

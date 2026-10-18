@@ -14,6 +14,9 @@ import (
 	"github.com/mansonxasthur/notifier/internal/lifecycle"
 )
 
+// handshakeTimeout bounds the AMQP handshake after the TCP connection is made.
+const handshakeTimeout = 5 * time.Second
+
 // Conn is a lifecycle component around an AMQP connection. It redials on demand, so a
 // broker restart needs no process restart: the next Channel call after the connection
 // dropped dials again.
@@ -42,7 +45,18 @@ func (c *Conn) dial(ctx context.Context) error {
 	conn, err := amqp.DialConfig(c.url, amqp.Config{
 		Heartbeat: 10 * time.Second,
 		Dial: func(network, addr string) (net.Conn, error) {
-			return dialer.DialContext(ctx, network, addr)
+			nc, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			// A custom dialer loses the library's handshake deadline, and a half-started
+			// broker can accept the connection and never answer. The library clears the
+			// deadline once the connection is open.
+			if err := nc.SetDeadline(time.Now().Add(handshakeTimeout)); err != nil {
+				_ = nc.Close()
+				return nil, err
+			}
+			return nc, nil
 		},
 	})
 	if err != nil {

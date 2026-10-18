@@ -322,3 +322,16 @@ func (r Relay) validate() []error {
 func (b Backoff) Policy() domain.Backoff {
 	return domain.Backoff{Initial: b.Initial, Max: b.Max, Multiplier: b.Multiplier, Jitter: b.Jitter}
 }
+
+// PrimaryProviders maps each channel to the name of its primary provider.
+func (c *Config) PrimaryProviders() map[domain.Channel]string {
+	out := make(map[domain.Channel]string, len(c.Channels))
+	for ch, cc := range c.Channels {
+		for _, p := range cc.Providers {
+			if p.Primary {
+				out[ch] = p.Name
+			}
+		}
+	}
+	return out
+}
