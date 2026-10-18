@@ -22,6 +22,7 @@ type Config struct {
 	ShutdownTimeout   time.Duration               `yaml:"shutdown_timeout"`
 	HTTP              HTTP                        `yaml:"http"`
 	BatchLimit        int                         `yaml:"batch_limit"`
+	Accept            Accept                      `yaml:"accept"`
 	NotificationTypes map[string]NotificationType `yaml:"notification_types"`
 	Simulation        bool                        `yaml:"simulation"`
 	SimulationURL     string                      `yaml:"simulation_url"`
@@ -33,6 +34,17 @@ type Config struct {
 	DatabaseURL string `yaml:"-"`
 	AMQPURL     string `yaml:"-"`
 	RedisURL    string `yaml:"-"`
+
+	// APIKey is the one key producers send in X-API-KEY. It comes from the environment only.
+	APIKey string `yaml:"-"`
+}
+
+// Accept tunes the accept path.
+type Accept struct {
+	// ChunkSize is the most delivery rows one insert statement carries.
+	ChunkSize int `yaml:"chunk_size"`
+	// MaxBodyBytes caps a request body.
+	MaxBodyBytes int64 `yaml:"max_body_bytes"`
 }
 
 type HTTP struct {
@@ -111,6 +123,7 @@ func parse(r io.Reader, getenv func(string) string) (*Config, error) {
 	c.DatabaseURL = getenv("DATABASE_URL")
 	c.AMQPURL = getenv("AMQP_URL")
 	c.RedisURL = getenv("REDIS_URL")
+	c.APIKey = getenv("API_KEY")
 	if addr := getenv("HTTP_ADDR"); addr != "" {
 		c.HTTP.Addr = addr
 	}
@@ -128,11 +141,12 @@ const (
 	Postgres Dependency = "DATABASE_URL"
 	RabbitMQ Dependency = "AMQP_URL"
 	Redis    Dependency = "REDIS_URL"
+	APIKey   Dependency = "API_KEY"
 )
 
 // Require fails when a connection string the calling entry point needs is unset.
 func (c *Config) Require(deps ...Dependency) error {
-	urls := map[Dependency]string{Postgres: c.DatabaseURL, RabbitMQ: c.AMQPURL, Redis: c.RedisURL}
+	urls := map[Dependency]string{Postgres: c.DatabaseURL, RabbitMQ: c.AMQPURL, Redis: c.RedisURL, APIKey: c.APIKey}
 	var errs []error
 	for _, d := range deps {
 		if urls[d] == "" {
@@ -155,6 +169,12 @@ func (c *Config) Validate() error {
 	}
 	if c.BatchLimit <= 0 {
 		bad("batch_limit must be positive")
+	}
+	if c.Accept.ChunkSize <= 0 {
+		bad("accept.chunk_size must be positive")
+	}
+	if c.Accept.MaxBodyBytes <= 0 {
+		bad("accept.max_body_bytes must be positive")
 	}
 
 	if len(c.NotificationTypes) == 0 {

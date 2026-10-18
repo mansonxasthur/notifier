@@ -69,6 +69,9 @@ services:
   api:
     <<: *app
     build: {context: ., dockerfile: infra/Dockerfile, args: {SERVICE: api}}
+    environment:
+      <<: *app-env
+      API_KEY: dev-api-key # local development only
     ports: ["8080:8080"]
 
   relay:

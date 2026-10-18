@@ -1,5 +1,6 @@
 # Defaults for every entry point. Connection strings come from the environment
 # (DATABASE_URL, AMQP_URL, REDIS_URL); HTTP_ADDR overrides http.addr.
+# The api entry point also requires API_KEY, the key producers send in X-API-KEY.
 
 shutdown_timeout: 20s
 
@@ -7,7 +8,13 @@ http:
   addr: ":8080"
 
 # Largest accepted request, in recipients.
-batch_limit: 10000
+batch_limit: 3000
+
+# chunk_size: most delivery rows per insert statement. max_body_bytes: request body cap
+# (3,000 recipients with three channels and content fit well inside it).
+accept:
+  chunk_size: 5000
+  max_body_bytes: 4194304
 
 # Default expiry for a delivery when the request carries no expires_at.
 notification_types:

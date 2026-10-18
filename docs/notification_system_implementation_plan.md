@@ -19,7 +19,7 @@ Goal: an empty but wired project that builds, starts three entry points, and tal
 - [x] Repository layout with `domain`, `ports`, `adapters`, and `cmd` for `api`, `relay`, and `sender`
 - [x] docker-compose with PostgreSQL, RabbitMQ, one Redis (breaker state and rate limits), and the simulated provider service
 - [x] Migrations for notifications, deliveries, outbox, and inbox tables (every column NOT NULL except next\_attempt\_at and failure\_reason in the outbox, and next\_attempt\_at, failure\_class, and failure\_reason in the inbox; contact and content as jsonb; outbox keyed by delivery\_id with state, retries, last\_try, next\_attempt\_at, and failure\_reason; inbox keyed by delivery\_id with state, provider, retries, claim\_count, last\_try, next\_attempt\_at, failure\_class, and failure\_reason), including the unique constraint on `(notification_id, recipient_id, channel)` and partial indexes: outbox `next_attempt_at` for the relay (an empty value counts as due now), `last_try` on both tables for the janitor, and inbox `next_attempt_at` for the sender scan
-- [x] Configuration loading: per-notification-type expiry values, provider order, per-provider call timeout, whether it supports a status lookup, maximum retries, and backoff with jitter, the batch limit (10,000 recipients), poll intervals for the relay and the sender scan, and janitor thresholds
+- [x] Configuration loading: per-notification-type expiry values, provider order, per-provider call timeout, whether it supports a status lookup, maximum retries, and backoff with jitter, the batch limit (3,000 recipients), poll intervals for the relay and the sender scan, and janitor thresholds
 - [x] `slog` setup with stdout as the default handler
 - [x] CI that runs lint and unit tests
 
@@ -30,15 +30,51 @@ Done when all three entry points start, connect, and exit cleanly. Graceful shut
 Goal: the Dispatcher validates, persists durably, and acknowledges, with correct duplicate handling.
 
 - [ ] HTTP endpoint for single and batch requests with API key authentication
-- [ ] Service identity derived from the key, which is how internal services authorize their access
+- [ ] One API key, sent in `X-API-KEY` and compared with the configured value; identifying the calling service is out of scope
 - [ ] Per-recipient validation with reason codes, run before any database write, including a check that every listed channel has content in an accepted shape (text for SMS, inline content or a template ID with variables for email and WhatsApp)
-- [ ] A request over the batch limit (10,000 recipients) is rejected, and inserts run in chunks
+- [ ] A request over the recipient limit (3,000, so at most 9,000 deliveries with three channels) is rejected, and inserts run in chunks of about 5,000 rows per statement, all inside one transaction
 - [ ] In-memory de-duplication of repeated recipients inside one payload
-- [ ] Batch insert of deliveries with `ON CONFLICT DO NOTHING ... RETURNING`, plus outbox rows for the inserted rows only, in one transaction
+- [ ] Batch insert of deliveries with `ON CONFLICT DO NOTHING ... RETURNING`, plus outbox rows for the inserted rows only, in one transaction (see the SQL recommendations below)
 - [ ] Expiry stamped on each delivery as `expires_at` from the request's optional expires\_at, or else the notification type's default; a deadline in the past is rejected at validation, and any future deadline overrides the default
 - [ ] The Dispatcher never talks to the broker: the outbox rows written in the same transaction are the only hand-off to the queue
 - [ ] Response with `accepted`, `duplicates`, and `rejected` (with reasons), and the status codes from the log
 - [ ] Idempotent retry test: the same request twice creates no new rows, and the same key with a different payload is treated as a duplicate (the first request wins)
+
+**SQL recommendations for the accept path**
+
+- **One transaction per request.** Insert the notification, then the deliveries and outbox rows chunk by chunk, then commit. The default READ COMMITTED isolation is enough.
+- **The notification takes two steps.** Insert with `ON CONFLICT DO NOTHING`. If no row comes back, the key already exists, so read it in a second statement. A single statement that combines the insert and the lookup can miss a row that a concurrent request committed a moment earlier.
+
+```sql
+INSERT INTO notifications (idempotency_key, type, content)
+VALUES ($1, $2, $3)
+ON CONFLICT (idempotency_key) DO NOTHING
+RETURNING id;
+
+-- No row returned means the key already exists:
+SELECT id FROM notifications WHERE idempotency_key = $1;
+```
+
+- **Deliveries and outbox in one statement per chunk,** with arrays and `unnest`, so the statement always has five parameters however many rows it carries. The outbox rows come from `RETURNING`, so only newly inserted deliveries get one.
+
+```sql
+WITH inserted AS (
+  INSERT INTO deliveries (notification_id, recipient_id, channel, contact, expires_at, state)
+  SELECT $1::bigint, r.recipient_id, r.channel, r.contact, $2::timestamptz, 'PENDING'
+  FROM unnest($3::text[], $4::text[], $5::jsonb[]) AS r(recipient_id, channel, contact)
+  ORDER BY r.recipient_id, r.channel
+  ON CONFLICT (notification_id, recipient_id, channel) DO NOTHING
+  RETURNING id
+)
+INSERT INTO outbox (delivery_id, state, retries, last_try)
+SELECT id, 'NEW', 0, now() FROM inserted;
+```
+
+- **Counts come from the command tag.** The row count of the outer `INSERT` is the number accepted, and the chunk's rows minus that number are the duplicates.
+- **Chunk size.** Up to about 5,000 rows per statement, so a request of 3,000 recipients with three channels (9,000 rows) is two statements in the same transaction. With a plain multi-row `VALUES` list the limit is 65,535 bind parameters, which is about 10,900 rows at six parameters each, so `unnest` avoids the limit and a fourth channel or an extra column cannot break it.
+- **Order the rows** by `(recipient_id, channel)` before inserting, so two overlapping requests take their locks in the same order and cannot deadlock.
+- **Do not use `COPY`.** It has no `ON CONFLICT`, so it would need a staging table, which is more machinery than this accept path needs.
+- **Remove duplicates in memory first.** The plan already does this for repeated recipients inside one payload, which keeps the database check as the safety net.
 
 Done when a 1,000-recipient batch containing one duplicate and one invalid row returns the expected counts, and the database holds exactly the accepted rows.
 

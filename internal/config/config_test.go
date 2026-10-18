@@ -49,6 +49,7 @@ func TestEnvOverrides(t *testing.T) {
 		"AMQP_URL":     "amqp://mq",
 		"REDIS_URL":    "redis://cache",
 		"HTTP_ADDR":    ":9999",
+		"API_KEY":      "k",
 	}
 	c, err := Load(shippedConfig, func(k string) string { return env[k] })
 	if err != nil {
@@ -56,6 +57,9 @@ func TestEnvOverrides(t *testing.T) {
 	}
 	if c.DatabaseURL != "postgres://db" || c.AMQPURL != "amqp://mq" || c.RedisURL != "redis://cache" {
 		t.Errorf("connection strings not read from env: %+v", c)
+	}
+	if c.APIKey != "k" {
+		t.Errorf("API_KEY not read from env: %q", c.APIKey)
 	}
 	if c.HTTP.Addr != ":9999" {
 		t.Errorf("HTTP_ADDR should override http.addr, got %q", c.HTTP.Addr)
@@ -70,6 +74,9 @@ func TestRequire(t *testing.T) {
 	c.DatabaseURL = "postgres://db"
 	if err := c.Require(Postgres); err != nil {
 		t.Fatalf("database only: %v", err)
+	}
+	if err := c.Require(Postgres, APIKey); err == nil {
+		t.Fatal("want error for unset API_KEY")
 	}
 }
 
@@ -111,6 +118,8 @@ func TestValidateRejects(t *testing.T) {
 		{"no shutdown timeout", func(c *Config) { c.ShutdownTimeout = 0 }, "shutdown_timeout"},
 		{"no listen address", func(c *Config) { c.HTTP.Addr = "" }, "http.addr"},
 		{"batch limit zero", func(c *Config) { c.BatchLimit = 0 }, "batch_limit"},
+		{"chunk size zero", func(c *Config) { c.Accept.ChunkSize = 0 }, "accept.chunk_size"},
+		{"body cap zero", func(c *Config) { c.Accept.MaxBodyBytes = 0 }, "accept.max_body_bytes"},
 		{"no notification types", func(c *Config) { c.NotificationTypes = nil }, "notification_types"},
 		{"empty type name", func(c *Config) { c.NotificationTypes[""] = NotificationType{Expiry: time.Hour} }, "empty type name"},
 		{"type expiry zero", func(c *Config) { c.NotificationTypes["marketing"] = NotificationType{} }, "marketing.expiry"},
