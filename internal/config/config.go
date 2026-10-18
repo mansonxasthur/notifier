@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"sort"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -26,6 +28,7 @@ type Config struct {
 	NotificationTypes map[string]NotificationType `yaml:"notification_types"`
 	Simulation        bool                        `yaml:"simulation"`
 	SimulationURL     string                      `yaml:"simulation_url"`
+	SimProvider       SimProvider                 `yaml:"simprovider"`
 	Channels          map[domain.Channel]Channel  `yaml:"channels"`
 	Relay             Relay                       `yaml:"relay"`
 	Sender            Sender                      `yaml:"sender"`
@@ -37,7 +40,20 @@ type Config struct {
 
 	// APIKey is the one key producers send in X-API-KEY. It comes from the environment only.
 	APIKey string `yaml:"-"`
+
+	// WebhookSecrets holds each provider's webhook secret by provider name, read from the
+	// environment variable that provider's webhook.secret_env names.
+	WebhookSecrets map[string]Secret `yaml:"-"`
 }
+
+// Secret is a credential that prints as "[redacted]" in formatted output and logs.
+// Reveal returns the value.
+type Secret string
+
+func (Secret) String() string       { return "[redacted]" }
+func (Secret) GoString() string     { return "[redacted]" }
+func (Secret) LogValue() slog.Value { return slog.StringValue("[redacted]") }
+func (s Secret) Reveal() string     { return string(s) }
 
 // Accept tunes the accept path.
 type Accept struct {
@@ -69,7 +85,50 @@ type Provider struct {
 	StatusLookup bool          `yaml:"status_lookup"`
 	MaxRetries   int           `yaml:"max_retries"`
 	Backoff      Backoff       `yaml:"backoff"`
+	Webhook      Webhook       `yaml:"webhook"`
 }
+
+// WebhookAuth names how a provider authenticates the webhooks it sends us.
+type WebhookAuth string
+
+const (
+	// WebhookHMAC: Header carries the hex HMAC-SHA256 of the request body, keyed by the secret.
+	WebhookHMAC WebhookAuth = "hmac_signature"
+	// WebhookSharedSecret: Header carries the secret itself.
+	WebhookSharedSecret WebhookAuth = "shared_secret_header"
+)
+
+// Valid reports whether a is a known scheme.
+func (a WebhookAuth) Valid() bool { return a == WebhookHMAC || a == WebhookSharedSecret }
+
+// Webhook is how one provider's webhooks are authenticated.
+type Webhook struct {
+	Auth   WebhookAuth `yaml:"auth"`
+	Header string      `yaml:"header"`
+	// SecretEnv is the name of the environment variable that holds the secret.
+	SecretEnv string `yaml:"secret_env"`
+}
+
+// SimProvider configures the simulated provider service.
+type SimProvider struct {
+	// Mode is "random", which draws a scenario per request from Weights, or the name of one
+	// scenario applied to every request.
+	Mode string `yaml:"mode"`
+	// Seed makes random mode reproducible; zero seeds from the clock.
+	Seed    int64                   `yaml:"seed"`
+	Weights map[domain.Scenario]int `yaml:"weights"`
+	// SlowDelay is how long a slow call takes; keep it under the providers' timeouts.
+	SlowDelay time.Duration `yaml:"slow_delay"`
+	// TimeoutDelay is how long a timing-out call hangs; keep it over the providers' timeouts.
+	TimeoutDelay time.Duration `yaml:"timeout_delay"`
+	// WebhookDelay is the wait before a delivery or late-failure webhook is sent.
+	WebhookDelay time.Duration `yaml:"webhook_delay"`
+	// WebhookURL is the API's base URL; webhooks go to <WebhookURL>/v1/webhooks/<provider>.
+	WebhookURL string `yaml:"webhook_url"`
+}
+
+// RandomMode is the SimProvider mode that draws a scenario per request.
+const RandomMode = "random"
 
 type Backoff struct {
 	Initial    time.Duration `yaml:"initial"`
@@ -134,6 +193,15 @@ func parse(r io.Reader, getenv func(string) string) (*Config, error) {
 		c.HTTP.Addr = addr
 	}
 
+	c.WebhookSecrets = map[string]Secret{}
+	for _, cc := range c.Channels {
+		for _, p := range cc.Providers {
+			if p.Webhook.SecretEnv != "" {
+				c.WebhookSecrets[p.Name] = Secret(getenv(p.Webhook.SecretEnv))
+			}
+		}
+	}
+
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
@@ -158,6 +226,25 @@ func (c *Config) Require(deps ...Dependency) error {
 		if urls[d] == "" {
 			errs = append(errs, fmt.Errorf("%s is required", d))
 		}
+	}
+	return errors.Join(errs...)
+}
+
+// RequireWebhookSecrets fails when a provider's webhook secret environment variable is unset.
+// Entry points that verify or sign webhooks call it; an empty secret must never authenticate.
+func (c *Config) RequireWebhookSecrets() error {
+	var missing []string
+	for _, cc := range c.Channels {
+		for _, p := range cc.Providers {
+			if c.WebhookSecrets[p.Name] == "" {
+				missing = append(missing, fmt.Sprintf("%s (webhook secret for %s)", p.Webhook.SecretEnv, p.Name))
+			}
+		}
+	}
+	sort.Strings(missing)
+	errs := make([]error, len(missing))
+	for i, m := range missing {
+		errs[i] = fmt.Errorf("%s is required", m)
 	}
 	return errors.Join(errs...)
 }
@@ -197,6 +284,19 @@ func (c *Config) Validate() error {
 
 	if c.Simulation && c.SimulationURL == "" {
 		bad("simulation_url is required when simulation is true")
+	}
+
+	if c.Simulation {
+		errs = append(errs, c.SimProvider.validate(c.providerTimeouts())...)
+	}
+	names := map[string]bool{}
+	for _, ch := range domain.Channels() {
+		for _, p := range c.Channels[ch].Providers {
+			if p.Name != "" && names[p.Name] {
+				bad("provider name %q is used in more than one channel; webhook routes and secrets are keyed by it", p.Name)
+			}
+			names[p.Name] = true
+		}
 	}
 
 	for ch := range c.Channels {
@@ -265,9 +365,83 @@ func (cc Channel) validate(name string, simulation bool) []error {
 			bad("%s.max_retries must not be negative", at)
 		}
 		errs = append(errs, p.Backoff.validate(at+".backoff")...)
+		errs = append(errs, p.Webhook.validate(at+".webhook")...)
 	}
 	if primaries != 1 {
 		bad("channels.%s needs exactly one primary provider, found %d", name, primaries)
+	}
+	return errs
+}
+
+func (w Webhook) validate(at string) []error {
+	var errs []error
+	bad := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+
+	if !w.Auth.Valid() {
+		bad("%s.auth %q is not a known scheme (%s or %s)", at, w.Auth, WebhookHMAC, WebhookSharedSecret)
+	}
+	if w.Header == "" {
+		bad("%s.header is required", at)
+	}
+	if w.SecretEnv == "" {
+		bad("%s.secret_env is required", at)
+	}
+	return errs
+}
+
+// providerTimeouts returns the shortest and longest configured provider timeout.
+func (c *Config) providerTimeouts() (shortest, longest time.Duration) {
+	for _, cc := range c.Channels {
+		for _, p := range cc.Providers {
+			if p.Timeout <= 0 {
+				continue
+			}
+			if shortest == 0 || p.Timeout < shortest {
+				shortest = p.Timeout
+			}
+			longest = max(longest, p.Timeout)
+		}
+	}
+	return shortest, longest
+}
+
+func (s SimProvider) validate(shortestTimeout, longestTimeout time.Duration) []error {
+	var errs []error
+	bad := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+
+	if s.Mode != RandomMode && !domain.Scenario(s.Mode).Valid() {
+		bad("simprovider.mode %q must be %q or a scenario name", s.Mode, RandomMode)
+	}
+	total := 0
+	for sc, w := range s.Weights {
+		if !sc.Valid() {
+			bad("simprovider.weights.%s is not a known scenario", sc)
+		}
+		if w < 0 {
+			bad("simprovider.weights.%s must not be negative", sc)
+		}
+		total += w
+	}
+	if s.Mode == RandomMode && total <= 0 {
+		bad("simprovider.weights needs a positive weight when mode is %q", RandomMode)
+	}
+	if s.SlowDelay <= 0 {
+		bad("simprovider.slow_delay must be positive")
+	}
+	if shortestTimeout > 0 && s.SlowDelay >= shortestTimeout {
+		bad("simprovider.slow_delay must be below the shortest provider timeout (%s)", shortestTimeout)
+	}
+	if s.TimeoutDelay <= 0 {
+		bad("simprovider.timeout_delay must be positive")
+	}
+	if s.TimeoutDelay > 0 && s.TimeoutDelay <= longestTimeout {
+		bad("simprovider.timeout_delay must exceed the longest provider timeout (%s)", longestTimeout)
+	}
+	if s.WebhookDelay <= 0 {
+		bad("simprovider.webhook_delay must be positive")
+	}
+	if s.WebhookURL == "" {
+		bad("simprovider.webhook_url is required")
 	}
 	return errs
 }

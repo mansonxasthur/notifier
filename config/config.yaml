@@ -27,7 +27,24 @@ notification_types:
 simulation: true
 simulation_url: http://simprovider:8081
 
+# The simulated provider service. mode is "random" (a scenario per request, drawn from
+# weights; seed 0 seeds from the clock) or one scenario name applied to every request:
+# succeed, fail_permanent, fail_transient, slow, timeout, late_failure.
+simprovider:
+  mode: random
+  seed: 0
+  weights: {succeed: 70, fail_permanent: 5, fail_transient: 10, slow: 5, timeout: 5, late_failure: 5}
+  # Keep slow_delay under the providers' timeout and timeout_delay over it.
+  slow_delay: 500ms
+  timeout_delay: 3s
+  # Wait before a delivery or late-failure webhook is sent to the API.
+  webhook_delay: 300ms
+  webhook_url: http://api:8080
+
 # Providers are tried in list order. Exactly one per channel is primary; the rest are fallbacks.
+# webhook: how the provider authenticates its webhooks to POST /v1/webhooks/<name>. auth is
+# hmac_signature (header = hex HMAC-SHA256 of the body) or shared_secret_header (header = the
+# secret). secret_env names the environment variable holding the secret.
 channels:
   email:
     providers:
@@ -38,6 +55,7 @@ channels:
         status_lookup: true
         max_retries: 1
         backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        webhook: {auth: hmac_signature, header: X-Signature, secret_env: WEBHOOK_SECRET_EMAIL_A}
       - name: email-b
         primary: false
         url: https://email-b.example.com
@@ -45,6 +63,7 @@ channels:
         status_lookup: false
         max_retries: 1
         backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        webhook: {auth: shared_secret_header, header: X-Webhook-Token, secret_env: WEBHOOK_SECRET_EMAIL_B}
   sms:
     providers:
       - name: sms-a
@@ -54,6 +73,7 @@ channels:
         status_lookup: true
         max_retries: 1
         backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        webhook: {auth: hmac_signature, header: X-Signature, secret_env: WEBHOOK_SECRET_SMS_A}
       - name: sms-b
         primary: false
         url: https://sms-b.example.com
@@ -61,6 +81,7 @@ channels:
         status_lookup: false
         max_retries: 1
         backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        webhook: {auth: shared_secret_header, header: X-Webhook-Token, secret_env: WEBHOOK_SECRET_SMS_B}
   whatsapp:
     providers:
       - name: whatsapp-a
@@ -70,6 +91,7 @@ channels:
         status_lookup: true
         max_retries: 1
         backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        webhook: {auth: hmac_signature, header: X-Signature, secret_env: WEBHOOK_SECRET_WHATSAPP_A}
       - name: whatsapp-b
         primary: false
         url: https://whatsapp-b.example.com
@@ -77,6 +99,7 @@ channels:
         status_lookup: false
         max_retries: 1
         backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        webhook: {auth: shared_secret_header, header: X-Webhook-Token, secret_env: WEBHOOK_SECRET_WHATSAPP_B}
 
 relay:
   poll_interval: 100ms

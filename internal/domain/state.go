@@ -47,7 +47,24 @@ const (
 	ReasonMaxAttemptsExceeded FailureReason = "MAX_ATTEMPTS_EXCEEDED"
 	ReasonMaxClaimsExceeded   FailureReason = "MAX_CLAIMS_EXCEEDED"
 	ReasonPublishFailed       FailureReason = "PUBLISH_FAILED"
+	// ReasonProviderRejected: the provider refused the message itself (a 4xx).
+	ReasonProviderRejected FailureReason = "PROVIDER_REJECTED"
+	// ReasonProviderFailed: the provider reported a failure after accepting the message.
+	// It also stands in for a webhook reason the enum does not know.
+	ReasonProviderFailed     FailureReason = "PROVIDER_FAILED"
+	ReasonBounced            FailureReason = "BOUNCED"
+	ReasonInvalidDestination FailureReason = "INVALID_DESTINATION"
 )
+
+// Valid reports whether r is one of the enum values.
+func (r FailureReason) Valid() bool {
+	switch r {
+	case ReasonMaxAttemptsExceeded, ReasonMaxClaimsExceeded, ReasonPublishFailed,
+		ReasonProviderRejected, ReasonProviderFailed, ReasonBounced, ReasonInvalidDestination:
+		return true
+	}
+	return false
+}
 
 // OutboxClaim is an outbox row a relay holds. Retries is the fencing token: the claim is
 // only valid while the row still carries this value.

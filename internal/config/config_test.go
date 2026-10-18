@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -190,6 +191,36 @@ func TestValidateRejects(t *testing.T) {
 		{"relay confirm timeout zero", func(c *Config) { c.Relay.ConfirmTimeout = 0 }, "relay.confirm_timeout"},
 		{"sender prefetch zero", func(c *Config) { c.Sender.Prefetch = 0 }, "sender.prefetch"},
 		{"sender poll zero", func(c *Config) { c.Sender.PollInterval = 0 }, "sender.poll_interval"},
+		{"webhook unknown auth", func(c *Config) {
+			cc := email(c)
+			cc.Providers[0].Webhook.Auth = "bogus"
+			setEmail(c, cc)
+		}, "webhook.auth"},
+		{"webhook no header", func(c *Config) {
+			cc := email(c)
+			cc.Providers[0].Webhook.Header = ""
+			setEmail(c, cc)
+		}, "webhook.header"},
+		{"webhook no secret env", func(c *Config) {
+			cc := email(c)
+			cc.Providers[0].Webhook.SecretEnv = ""
+			setEmail(c, cc)
+		}, "webhook.secret_env"},
+		{"simprovider unknown mode", func(c *Config) { c.SimProvider.Mode = "chaos" }, "simprovider.mode"},
+		{"simprovider unknown weight", func(c *Config) { c.SimProvider.Weights["chaos"] = 1 }, "not a known scenario"},
+		{"simprovider negative weight", func(c *Config) { c.SimProvider.Weights[domain.ScenarioSlow] = -1 }, "must not be negative"},
+		{"simprovider random without weights", func(c *Config) { c.SimProvider.Weights = nil }, "positive weight"},
+		{"simprovider slow delay zero", func(c *Config) { c.SimProvider.SlowDelay = 0 }, "slow_delay"},
+		{"simprovider timeout delay zero", func(c *Config) { c.SimProvider.TimeoutDelay = 0 }, "timeout_delay"},
+		{"simprovider webhook delay zero", func(c *Config) { c.SimProvider.WebhookDelay = 0 }, "webhook_delay"},
+		{"simprovider no webhook url", func(c *Config) { c.SimProvider.WebhookURL = "" }, "webhook_url"},
+		{"duplicate provider name across channels", func(c *Config) {
+			cc := c.Channels[domain.ChannelSMS]
+			cc.Providers[0].Name = "email-a"
+			c.Channels[domain.ChannelSMS] = cc
+		}, "more than one channel"},
+		{"slow delay not below timeout", func(c *Config) { c.SimProvider.SlowDelay = 2 * time.Second }, "slow_delay must be below"},
+		{"timeout delay not above timeout", func(c *Config) { c.SimProvider.TimeoutDelay = time.Second }, "timeout_delay must exceed"},
 		{"sender claims zero", func(c *Config) { c.Sender.MaxClaims = 0 }, "sender.max_claims"},
 	}
 	for _, tt := range tests {
@@ -214,5 +245,59 @@ func TestValidateReportsEveryProblem(t *testing.T) {
 	err := c.Validate()
 	if err == nil || !strings.Contains(err.Error(), "batch_limit") || !strings.Contains(err.Error(), "max_claims") {
 		t.Fatalf("want both problems reported, got %v", err)
+	}
+}
+
+func TestPinnedScenarioNeedsNoWeights(t *testing.T) {
+	c := loadShipped(t)
+	c.SimProvider.Mode, c.SimProvider.Weights = string(domain.ScenarioLateFailure), nil
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a pinned scenario should not need weights: %v", err)
+	}
+}
+
+func TestWebhookSecretsFromEnv(t *testing.T) {
+	c := loadShipped(t)
+	if err := c.RequireWebhookSecrets(); err == nil || !strings.Contains(err.Error(), "WEBHOOK_SECRET_EMAIL_A") {
+		t.Fatalf("want every unset secret reported, got %v", err)
+	}
+
+	env := func(k string) string {
+		if strings.HasPrefix(k, "WEBHOOK_SECRET_") {
+			return "s-" + k
+		}
+		return ""
+	}
+	c, err := Load(shippedConfig, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.WebhookSecrets["email-a"].Reveal(); got != "s-WEBHOOK_SECRET_EMAIL_A" {
+		t.Errorf("email-a secret = %q", got)
+	}
+	if err := c.RequireWebhookSecrets(); err != nil {
+		t.Errorf("all secrets set, got %v", err)
+	}
+}
+
+func TestSimProviderIgnoredWhenNotSimulating(t *testing.T) {
+	c := loadShipped(t)
+	c.Simulation, c.SimProvider = false, SimProvider{}
+	for _, cc := range c.Channels {
+		for i := range cc.Providers {
+			cc.Providers[i].URL = "https://provider.example.com"
+		}
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("simprovider settings must not be required when simulation is off: %v", err)
+	}
+}
+
+func TestSecretIsRedacted(t *testing.T) {
+	s := Secret("hunter2")
+	for _, got := range []string{fmt.Sprint(s), fmt.Sprintf("%+v", s), fmt.Sprintf("%#v", s), fmt.Sprint(map[string]Secret{"a": s})} {
+		if strings.Contains(got, "hunter2") {
+			t.Errorf("secret leaked: %s", got)
+		}
 	}
 }
