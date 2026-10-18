@@ -161,3 +161,38 @@ func TestBreakerReleaseOfAStaleTicketKeepsTheProbeSlot(t *testing.T) {
 		t.Fatal("releasing a stale ticket freed the real probe's slot")
 	}
 }
+
+func TestBreakerIgnoresAResultReportedWithoutATicket(t *testing.T) {
+	b, _ := newTestBreakers()
+	for range 5 {
+		if got := b.Failure("a", Ticket{}); got != NoChange {
+			t.Fatalf("a failure without a ticket changed the breaker: %v", got)
+		}
+	}
+	if !b.can("a") {
+		t.Fatal("results without a ticket opened the breaker")
+	}
+}
+
+func TestBreakerReplacesAProbeThatNeverAnswers(t *testing.T) {
+	b, c := newTestBreakers()
+	tripBreaker(b, "a")
+	c.advance(10 * time.Second)
+	lost, _ := b.Allow("a") // the probe whose call never returns
+	c.advance(9 * time.Second)
+	if b.can("a") {
+		t.Fatal("a second probe was allowed before a whole open period passed")
+	}
+	c.advance(time.Second)
+	probe, ok := b.Allow("a")
+	if !ok || !probe.probe {
+		t.Fatal("the breaker stayed half-open for good behind a lost probe")
+	}
+	// The lost probe finally answers; it must not decide anything now.
+	if got := b.Failure("a", lost); got != NoChange {
+		t.Fatalf("late result of a lost probe: transition %v, want NoChange", got)
+	}
+	if got := b.Success("a", probe); got != Closed {
+		t.Fatalf("new probe success: transition %v, want Closed", got)
+	}
+}

@@ -107,6 +107,7 @@ func (a *Attempt) Send(ctx context.Context, c Claimed) error {
 		return a.fail(settleCtx, run, "", domain.ReasonExpired)
 	}
 	ticket, allowed := a.breakers.Allow(c.Provider)
+	run.ticket = ticket
 	if !allowed {
 		if run.next == "" {
 			return a.noProvider(settleCtx, run)
@@ -121,7 +122,6 @@ func (a *Attempt) Send(ctx context.Context, c Claimed) error {
 		return a.throttle(settleCtx, run, wait, d.ExpiresAt)
 	}
 
-	run.ticket = ticket
 	err = run.provider.Send(ctx, ports.SendRequest{DeliveryID: d.ID, Channel: d.Channel, Contact: d.Contact, Content: d.Content})
 	return a.settle(ctx, run, err)
 }

@@ -276,3 +276,23 @@ func TestSpikeDrainsWithoutExceedingTheProviderRate(t *testing.T) {
 }
 
 func newClock() *clock { return &clock{t: time.Unix(1_000_000, 0)} }
+
+// TestAttemptReportsToTheBreakerWithItsTicket drives Send through a whole open, half-open and
+// closed cycle, so a ticket that is lost on the way would leave the breaker open for good.
+func TestAttemptReportsToTheBreakerWithItsTicket(t *testing.T) {
+	f := newFixture(t, nil)
+	tripBreaker(f.breaker, "sms-a")
+	f.clock.advance(10 * time.Second) // half-open: the next call is the probe
+
+	if err := f.attempt.Send(context.Background(), f.claim); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.prov.calls) != 1 {
+		t.Fatalf("provider called %d times, want the probe", len(f.prov.calls))
+	}
+	for i := range 3 {
+		if !f.breaker.can("sms-a") {
+			t.Fatalf("breaker still refuses call %d after the probe succeeded", i)
+		}
+	}
+}

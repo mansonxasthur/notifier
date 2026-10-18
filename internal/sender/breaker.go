@@ -30,6 +30,8 @@ const (
 // Ticket is what Allow hands a caller: which open period the call began in, and whether it is the
 // half-open probe. The caller passes it back with the call's result.
 type Ticket struct {
+	// valid is false for the zero Ticket, so a result reported without one is ignored.
+	valid bool
 	epoch uint64
 	probe bool
 }
@@ -53,8 +55,9 @@ type breaker struct {
 	openedAt time.Time
 	// epoch counts the times the breaker has opened.
 	epoch uint64
-	// probing is true while the half-open probe is in flight.
+	// probing is true while the half-open probe is in flight, and probeAt is when it began.
 	probing bool
+	probeAt time.Time
 }
 
 // NewBreakers returns breakers with the given policy. now is the clock, so tests can move it.
@@ -71,19 +74,32 @@ func (b *Breakers) Allow(provider string) (Ticket, bool) {
 	br := b.get(provider)
 	switch br.state {
 	case stateClosed:
-		return Ticket{epoch: br.epoch}, true
+		return Ticket{valid: true, epoch: br.epoch}, true
 	case stateOpen:
 		if b.now().Sub(br.openedAt) < b.policy.OpenFor {
 			return Ticket{}, false
 		}
-		br.state = stateHalfOpen
+		return b.probe(br), true
 	default: // half-open: only the probe already in flight may proceed
-		if br.probing {
+		if !br.probing {
+			return b.probe(br), true
+		}
+		if b.now().Sub(br.probeAt) < b.policy.OpenFor {
 			return Ticket{}, false
 		}
+		// The probe has not answered for a whole open period: presume it lost, so the breaker
+		// cannot stay half-open for good. Its late result, if any, is stale.
+		br.epoch++
+		return b.probe(br), true
 	}
+}
+
+// probe makes the breaker half-open and hands out its one probe ticket.
+func (b *Breakers) probe(br *breaker) Ticket {
+	br.state = stateHalfOpen
 	br.probing = true
-	return Ticket{epoch: br.epoch, probe: true}, true
+	br.probeAt = b.now()
+	return Ticket{valid: true, epoch: br.epoch, probe: true}
 }
 
 // Success records a call that worked.
@@ -91,7 +107,7 @@ func (b *Breakers) Success(provider string, t Ticket) Transition {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	br := b.get(provider)
-	if t.epoch != br.epoch {
+	if !t.valid || t.epoch != br.epoch {
 		return NoChange
 	}
 	switch br.state {
@@ -114,7 +130,7 @@ func (b *Breakers) Failure(provider string, t Ticket) Transition {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	br := b.get(provider)
-	if t.epoch != br.epoch {
+	if !t.valid || t.epoch != br.epoch {
 		return NoChange
 	}
 	switch br.state {
@@ -141,7 +157,7 @@ func (b *Breakers) Release(provider string, t Ticket) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	br := b.get(provider)
-	if t.probe && t.epoch == br.epoch && br.state == stateHalfOpen {
+	if t.valid && t.probe && t.epoch == br.epoch && br.state == stateHalfOpen {
 		br.probing = false
 	}
 }
