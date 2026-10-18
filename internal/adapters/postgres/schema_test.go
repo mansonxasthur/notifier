@@ -7,74 +7,25 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/testcontainers/testcontainers-go"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/mansonxasthur/notifier/internal/adapters/postgres/pgtest"
 )
 
-const migrationsDir = "file://../../../migrations"
-
-// newDB starts a throwaway Postgres and returns its connection string.
-func newDB(t *testing.T) string {
-	t.Helper()
-	if testing.Short() {
-		t.Skip("integration test")
-	}
-	ctx := context.Background()
-	ctr, err := tcpostgres.Run(ctx, "postgres:17-alpine",
-		tcpostgres.WithDatabase("notifier"),
-		tcpostgres.WithUsername("notifier"),
-		tcpostgres.WithPassword("notifier"),
-		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
-			WithOccurrence(2)),
-	)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() { _ = testcontainers.TerminateContainer(ctr) })
-
-	url, err := ctr.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return url
-}
-
-func newMigrate(t *testing.T, url string) *migrate.Migrate {
-	t.Helper()
-	m, err := migrate.New(migrationsDir, strings.Replace(url, "postgres://", "pgx5://", 1))
-	if err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	t.Cleanup(func() { _, _ = m.Close() })
-	return m
-}
-
-func up(t *testing.T, m *migrate.Migrate) {
-	t.Helper()
-	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		t.Fatalf("up: %v", err)
-	}
-}
-
 func TestMigrationsRoundTrip(t *testing.T) {
-	m := newMigrate(t, newDB(t))
-	up(t, m)
+	url := pgtest.NewDB(t)
+	m := pgtest.Migrator(t, url)
+	pgtest.Up(t, m)
 	if err := m.Down(); err != nil {
 		t.Fatalf("down: %v", err)
 	}
-	up(t, m)
+	pgtest.Up(t, m)
 }
 
 func TestSchema(t *testing.T) {
 	ctx := context.Background()
-	url := newDB(t)
-	up(t, newMigrate(t, url))
+	url := pgtest.NewMigratedDB(t)
 
 	pool, err := pgxpool.New(ctx, url)
 	if err != nil {

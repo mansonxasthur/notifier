@@ -33,7 +33,7 @@ One endpoint accepts one notification for 1 to N recipients. Each recipient carr
 ```json
 {
   "idempotency_key": "uuid",
-  "type": "match_started",
+  "type": "match_alert",
   "expires_at": "2026-10-20T18:00:00Z",
   "content": {
     "email": { "template_id": "match_started_v2", "variables": { "team_a": "الهلال", "team_b": "النصر" } },
@@ -52,7 +52,9 @@ One endpoint accepts one notification for 1 to N recipients. Each recipient carr
 - **Idempotency keys.** Producers use UUIDs, and a key is unique across all producers. A repeat of a key with a different payload is treated as a duplicate: the first request wins, and the payload is not compared.
 - **Optional deadline.** `expires_at` is an absolute UTC timestamp, for example the start of a match. If the producer omits it, the notification type's configured expiry applies. A deadline already in the past is rejected, since every delivery would expire on arrival. A future deadline overrides the type's expiry however far away it is. The cost, accepted on purpose, is that a producer typo can keep deliveries in retry and reconciliation for longer.
 - **Content per channel.** The producer supplies content for each channel it uses, and the service forwards it without storing or rendering templates. SMS takes plain text. Email and WhatsApp take either inline content or a `template_id` with `variables`, which are shared by the whole request. A recipient listed on a channel that has no content is rejected with a reason code. Content is forwarded as UTF-8, so Arabic text passes through unchanged.
-- **Batch limit.** A request carries at most 10,000 recipients, a value kept in configuration, and the insert runs in chunks. Each recipient can have several channels, so one request can create several times as many delivery rows.
+- **Batch limit.** A request carries at most 3,000 recipients, a value kept in configuration (so at most 9,000 delivery rows with three channels, with headroom for more channels), and the insert runs in chunks of about 5,000 rows. A request over the limit is rejected whole with 413, and nothing is written. Each recipient can have several channels, so one request can create several times as many delivery rows.
+- **Authentication.** There is one API key, sent in the `X-API-KEY` header and compared with the value loaded from configuration. Identifying the calling service is out of scope, so nothing about the caller is stored.
+- **Inline content shape.** Inline email content is `{subject, body}` and inline WhatsApp content is `{body}`. The alternative is `{template_id, variables}` for both.
 - **Validation first.** Invalid rows are rejected individually with a reason code, before the database write, so they cannot poison a batch.
 - **Duplicates are success.** A row that already exists is skipped, not failed.
 - **No ordering guarantee.** Notifications are not delivered in the order they were accepted.
@@ -72,9 +74,16 @@ Response to a partly accepted batch:
 | Situation | HTTP status |
 | --- | --- |
 | At least one row accepted | 202 Accepted |
-| Whole request invalid (auth, malformed body) | 4xx |
+| Missing or wrong API key | 401 |
+| Malformed body | 400 |
+| More recipients than the batch limit, or a body over the size cap | 413 |
+| Replay of a key where every row already exists | 202, all rows counted as duplicates |
 | Every recipient rejected | 422 |
 | Database or infrastructure failure, nothing accepted | 5xx, safe to retry with the same key |
+
+Reason codes for a rejected recipient: `INVALID_RECIPIENT` (empty id, an id over 255 bytes or with a control character, or no channels), `INVALID_CONTACT` (not an email address or an E.164 number), `MISSING_CONTENT` (a listed channel has no content), `INVALID_CONTENT` (content not in an accepted shape, or text with a control character other than a line break or tab) and `UNKNOWN_CHANNEL`. One bad channel rejects the whole recipient with the first reason found, so a recipient is never half accepted. A valid recipient repeated inside one payload is not rejected: the first occurrence of each `(recipient_id, channel)` wins and the repeats count under `duplicates`. Every invalid entry is reported as rejected, so a bad repeat is never hidden and a valid repeat of an invalid entry is never dropped; a recipient can therefore appear in both `rejected` and the accepted count.
+
+Some problems reject the request as a whole with 422 and an error code: `INVALID_IDEMPOTENCY_KEY` (not a UUID), `NO_RECIPIENTS`, `UNKNOWN_TYPE` (a type that is not configured) and `EXPIRED_DEADLINE` (`expires_at` is not in the future).
 
 Validation rejections are not retryable. After fixing the data, the producer resends with the same idempotency key: accepted rows are skipped as duplicates and the fixed rows go through.
 
