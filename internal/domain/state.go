@@ -128,6 +128,8 @@ type OutboxClaim struct {
 type InboxClaim struct {
 	Result     InboxClaimResult
 	ClaimCount int
+	// Provider is the provider for this attempt: the row's current one, which a failover moves.
+	Provider string
 	// Retries is how many retries the row has already used on its provider.
 	Retries int
 }
@@ -143,6 +145,16 @@ const (
 	// InboxClaimDead: the delivery exceeded its claim cap and was failed.
 	InboxClaimDead
 )
+
+// DueInbox is a retry the sender's scan claimed because its next_attempt_at had passed.
+// ClaimCount is the fencing token of the claim the scan took.
+type DueInbox struct {
+	DeliveryID int64
+	Provider   string
+	ClaimCount int
+	// Retries is how many retries the row has already used on Provider.
+	Retries int
+}
 
 // StuckInbox is an inbox row left in PROCESSING past its threshold. ClaimCount is the
 // fencing token for the sweep's update.

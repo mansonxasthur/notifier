@@ -167,7 +167,14 @@ func TestInboxPark(t *testing.T) {
 		t.Errorf("delivery = %s, want PENDING: a parked attempt is not a failure", got)
 	}
 
-	// The parked row can be claimed again, and the new claim has a new fencing token.
+	// A redelivered message cannot take the row before it is due: the scan owns the retry.
+	if c, err := store.Claim(ctx, id, "sms-a", 5); err != nil || c.Result != domain.InboxClaimDuplicate {
+		t.Errorf("claim before due = %+v, %v; want duplicate", c, err)
+	}
+	if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET next_attempt_at = now() - interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	// Once due, the parked row can be claimed again, and the new claim has a new fencing token.
 	c, err := store.Claim(ctx, id, "sms-a", 5)
 	if err != nil || c.Result != domain.InboxClaimWon || c.ClaimCount != n+1 {
 		t.Errorf("reclaim = %+v, %v; want won with claim_count %d", c, err, n+1)
