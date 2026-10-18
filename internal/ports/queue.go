@@ -9,7 +9,8 @@ import (
 // Publisher puts delivery IDs on a channel's queue.
 type Publisher interface {
 	// Publish sends the IDs and waits for the broker to confirm them. confirmed[i] is true
-	// only if ids[i] was confirmed; on error nothing is confirmed.
+	// only if ids[i] was confirmed, even when err is set: a failure part-way leaves the
+	// earlier confirmations valid.
 	Publish(ctx context.Context, ch domain.Channel, ids []int64) (confirmed []bool, err error)
 }
 
