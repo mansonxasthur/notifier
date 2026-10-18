@@ -66,16 +66,25 @@ func (s *OutboxStore) Claim(ctx context.Context, limit, maxAttempts int) ([]doma
 }
 
 const markPublished = `
-UPDATE outbox SET state = $3, last_try = now()
-WHERE delivery_id = $1 AND state = $4 AND retries = $2`
+UPDATE outbox o SET state = $3, last_try = now()
+FROM unnest($1::bigint[], $2::int[]) AS c(delivery_id, retries)
+WHERE o.delivery_id = c.delivery_id AND o.state = $4 AND o.retries = c.retries`
 
 // MarkPublished implements ports.OutboxStore.
-func (s *OutboxStore) MarkPublished(ctx context.Context, c domain.OutboxClaim) (bool, error) {
-	tag, err := s.db.Pool().Exec(ctx, markPublished, c.DeliveryID, c.Retries, domain.OutboxPublished, domain.OutboxProcessing)
-	if err != nil {
-		return false, fmt.Errorf("mark published: %w", err)
+func (s *OutboxStore) MarkPublished(ctx context.Context, claims []domain.OutboxClaim) (int, error) {
+	if len(claims) == 0 {
+		return 0, nil
 	}
-	return tag.RowsAffected() == 1, nil
+	ids := make([]int64, len(claims))
+	retries := make([]int32, len(claims))
+	for i, c := range claims {
+		ids[i], retries[i] = c.DeliveryID, int32(c.Retries) //nolint:gosec // retries is a small attempt counter
+	}
+	tag, err := s.db.Pool().Exec(ctx, markPublished, ids, retries, domain.OutboxPublished, domain.OutboxProcessing)
+	if err != nil {
+		return 0, fmt.Errorf("mark published: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 const releaseOutbox = `

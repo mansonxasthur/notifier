@@ -156,14 +156,14 @@ func TestOutboxFencing(t *testing.T) {
 		t.Fatalf("fresh claim = %+v, err = %v, want retries 2", fresh, err)
 	}
 
-	if ok, err := store.MarkPublished(ctx, stale[0]); err != nil || ok {
-		t.Errorf("stale MarkPublished = %v, %v, want false", ok, err)
+	if n, err := store.MarkPublished(ctx, stale); err != nil || n != 0 {
+		t.Errorf("stale MarkPublished = %d, %v, want 0", n, err)
 	}
 	if ok, err := store.Release(ctx, stale[0], time.Now(), domain.ReasonPublishFailed); err != nil || ok {
 		t.Errorf("stale Release = %v, %v, want false", ok, err)
 	}
-	if ok, err := store.MarkPublished(ctx, fresh[0]); err != nil || !ok {
-		t.Errorf("current MarkPublished = %v, %v, want true", ok, err)
+	if n, err := store.MarkPublished(ctx, fresh); err != nil || n != 1 {
+		t.Errorf("current MarkPublished = %d, %v, want 1", n, err)
 	}
 }
 
@@ -207,5 +207,35 @@ func TestOutboxReclaimStuck(t *testing.T) {
 	}
 	if got := count(t, db.Pool(), `SELECT count(*) FROM outbox WHERE state = 'PROCESSING'`); got != 1 {
 		t.Errorf("recent claim = %d rows still processing, want 1", got)
+	}
+}
+
+func TestOutboxMarkPublishedBatch(t *testing.T) {
+	ctx := context.Background()
+	db := seed(t, 5)
+	store := postgres.NewOutboxStore(db)
+
+	claims, err := store.Claim(ctx, 5, 5)
+	if err != nil || len(claims) != 5 {
+		t.Fatalf("claim = %d, %v", len(claims), err)
+	}
+	// One claim goes stale: its row is reclaimed and claimed again by someone else.
+	stale := claims[0]
+	if _, err := db.Pool().Exec(ctx, `UPDATE outbox SET retries = retries + 1 WHERE delivery_id = $1`, stale.DeliveryID); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := store.MarkPublished(ctx, claims)
+	if err != nil || n != 4 {
+		t.Fatalf("MarkPublished = %d, %v, want 4 (the stale claim is skipped)", n, err)
+	}
+	if got := count(t, db.Pool(), `SELECT count(*) FROM outbox WHERE state = 'PUBLISHED'`); got != 4 {
+		t.Errorf("published rows = %d, want 4", got)
+	}
+	if got := count(t, db.Pool(), `SELECT count(*) FROM outbox WHERE state = 'PROCESSING' AND delivery_id = $1`, stale.DeliveryID); got != 1 {
+		t.Error("the stale row must stay with its new owner")
+	}
+	if n, err := store.MarkPublished(ctx, nil); err != nil || n != 0 {
+		t.Errorf("empty MarkPublished = %d, %v, want 0", n, err)
 	}
 }

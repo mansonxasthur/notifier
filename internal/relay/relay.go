@@ -3,42 +3,60 @@ package relay
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/mansonxasthur/notifier/internal/domain"
 	"github.com/mansonxasthur/notifier/internal/ports"
 )
 
-// Config tunes the relay loop.
+// Config tunes the relay loops.
 type Config struct {
 	PollInterval time.Duration
 	BatchSize    int
-	MaxAttempts  int
-	Backoff      domain.Backoff
+	// Workers is how many claim-and-publish loops run. SKIP LOCKED keeps them off each
+	// other's rows.
+	Workers     int
+	MaxAttempts int
+	Backoff     domain.Backoff
 }
 
 // Relay claims due outbox rows, publishes them and records the outcome. Delivery to the
 // queue is at least once: a crash after a confirm but before MarkPublished republishes.
 type Relay struct {
 	*runner
-	store ports.OutboxStore
-	pub   ports.Publisher
-	cfg   Config
-	log   *slog.Logger
+	store        ports.OutboxStore
+	newPublisher func() ports.Publisher
+	cfg          Config
+	log          *slog.Logger
+
+	mu         sync.Mutex
+	publishers []ports.Publisher
 }
 
-func New(store ports.OutboxStore, pub ports.Publisher, cfg Config, log *slog.Logger) *Relay {
-	return &Relay{runner: newRunner("relay"), store: store, pub: pub, cfg: cfg, log: log}
+// New returns a relay whose workers each publish through their own publisher from
+// newPublisher, so one slow confirm does not hold up the others.
+func New(store ports.OutboxStore, newPublisher func() ports.Publisher, cfg Config, log *slog.Logger) *Relay {
+	return &Relay{runner: newRunner("relay"), store: store, newPublisher: newPublisher, cfg: cfg, log: log}
 }
 
 // Start implements lifecycle.Component.
 func (r *Relay) Start(ctx context.Context) error {
-	// The loop outlives the start context's cancellation on purpose: Stop ends it between
+	// The loops outlive the start context's cancellation on purpose: Stop ends them between
 	// batches, so a claimed batch is never abandoned half-published at shutdown.
 	ctx = context.WithoutCancel(ctx)
-	r.start(func(stop <-chan struct{}) {
+	pubs := make([]ports.Publisher, r.cfg.Workers)
+	for i := range pubs {
+		pubs[i] = r.newPublisher()
+	}
+	r.mu.Lock()
+	r.publishers = pubs
+	r.mu.Unlock()
+
+	r.start(r.cfg.Workers, func(worker int, stop <-chan struct{}) {
+		pub := pubs[worker]
 		for {
-			n := r.runOnce(ctx)
+			n := r.runOnce(ctx, pub)
 			if n >= r.cfg.BatchSize {
 				select {
 				case <-stop:
@@ -55,8 +73,25 @@ func (r *Relay) Start(ctx context.Context) error {
 	return nil
 }
 
-// runOnce handles one batch and returns how many rows it claimed.
-func (r *Relay) runOnce(ctx context.Context) int {
+// Stop implements lifecycle.Component. It waits for the workers, then closes the
+// publishers that have something to close.
+func (r *Relay) Stop(ctx context.Context) error {
+	if err := r.runner.Stop(ctx); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range r.publishers {
+		if s, ok := p.(interface{ Stop() }); ok {
+			s.Stop()
+		}
+	}
+	return nil
+}
+
+// runOnce handles one batch and returns how many rows it claimed. Every confirmed row of
+// the batch is marked PUBLISHED in a single update.
+func (r *Relay) runOnce(ctx context.Context, pub ports.Publisher) int {
 	claims, err := r.store.Claim(ctx, r.cfg.BatchSize, r.cfg.MaxAttempts)
 	if err != nil {
 		r.log.Error("claim outbox", "error", err)
@@ -70,47 +105,48 @@ func (r *Relay) runOnce(ctx context.Context) int {
 	for _, c := range claims {
 		byChannel[c.Channel] = append(byChannel[c.Channel], c)
 	}
+	confirmed := make([]domain.OutboxClaim, 0, len(claims))
 	for ch, group := range byChannel {
-		r.publish(ctx, ch, group)
+		confirmed = append(confirmed, r.publish(ctx, pub, ch, group)...)
 	}
+	r.markPublished(ctx, confirmed)
 	return len(claims)
 }
 
-func (r *Relay) publish(ctx context.Context, ch domain.Channel, group []domain.OutboxClaim) {
+// publish sends one channel's rows, releases the unconfirmed ones and returns the confirmed.
+func (r *Relay) publish(ctx context.Context, pub ports.Publisher, ch domain.Channel, group []domain.OutboxClaim) []domain.OutboxClaim {
 	ids := make([]int64, len(group))
 	for i, c := range group {
 		ids[i] = c.DeliveryID
 	}
-	confirmed, err := r.pub.Publish(ctx, ch, ids)
+	ok, err := pub.Publish(ctx, ch, ids)
 	if err != nil {
 		r.log.Warn("publish incomplete", "channel", ch, "batch", len(ids), "error", err)
 	}
 
-	var published int
+	confirmed := make([]domain.OutboxClaim, 0, len(group))
 	for i, c := range group {
-		if confirmed[i] {
-			if r.mark(ctx, c) {
-				published++
-			}
+		if ok[i] {
+			confirmed = append(confirmed, c)
 			continue
 		}
 		r.release(ctx, c)
 	}
-	r.log.Debug("published", "channel", ch, "published", published, "released", len(group)-published)
+	r.log.Debug("published", "channel", ch, "published", len(confirmed), "released", len(group)-len(confirmed))
+	return confirmed
 }
 
-// mark records a confirmed publish. A fenced-out claim is logged, not retried: another
-// relay owns the row now and its republish is harmless.
-func (r *Relay) mark(ctx context.Context, c domain.OutboxClaim) bool {
-	ok, err := r.store.MarkPublished(ctx, c)
+// markPublished records the confirmed rows. Fenced-out claims are logged, not retried:
+// another relay owns those rows now and its republish is harmless.
+func (r *Relay) markPublished(ctx context.Context, confirmed []domain.OutboxClaim) {
+	n, err := r.store.MarkPublished(ctx, confirmed)
 	switch {
 	case err != nil:
-		// The row stays PROCESSING and the janitor reclaims it, which republishes.
-		r.log.Error("mark published", "delivery_id", c.DeliveryID, "error", err)
-	case !ok:
-		r.log.Warn("claim lost before mark published", "delivery_id", c.DeliveryID)
+		// The rows stay PROCESSING and the janitor reclaims them, which republishes.
+		r.log.Error("mark published", "count", len(confirmed), "error", err)
+	case n < len(confirmed):
+		r.log.Warn("claims lost before mark published", "count", len(confirmed)-n)
 	}
-	return ok && err == nil
 }
 
 // release returns an unconfirmed row to NEW, due again after the backoff for its claims so far.

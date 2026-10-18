@@ -32,7 +32,7 @@ var (
 )
 
 func relayConfig() relay.Config {
-	return relay.Config{PollInterval: 10 * time.Millisecond, BatchSize: 20, MaxAttempts: 5, Backoff: backoff}
+	return relay.Config{PollInterval: 10 * time.Millisecond, BatchSize: 20, Workers: 3, MaxAttempts: 5, Backoff: backoff}
 }
 
 func startDB(t *testing.T) *postgres.Pool {
@@ -99,6 +99,9 @@ func start(t *testing.T, c interface {
 	t.Cleanup(func() { _ = c.Stop(ctx) })
 }
 
+// shared gives every relay worker the same concurrency-safe publisher.
+func shared(p ports.Publisher) func() ports.Publisher { return func() ports.Publisher { return p } }
+
 // failingPublisher confirms nothing while failing is set.
 type failingPublisher struct {
 	ports.Publisher
@@ -116,7 +119,7 @@ func TestRelayPublishes(t *testing.T) {
 	db := startDB(t)
 	seed(t, db, 50)
 	queue := memory.New()
-	start(t, relay.New(postgres.NewOutboxStore(db), queue, relayConfig(), quiet))
+	start(t, relay.New(postgres.NewOutboxStore(db), shared(queue), relayConfig(), quiet))
 
 	waitFor(t, "every outbox row published", func() bool {
 		return count(t, db.Pool(), `SELECT count(*) FROM outbox WHERE state = 'PUBLISHED'`) == 50
@@ -131,7 +134,7 @@ func TestRelayReleasesUnconfirmedAndRetries(t *testing.T) {
 	seed(t, db, 5)
 	pub := &failingPublisher{Publisher: memory.New()}
 	pub.failing.Store(true)
-	start(t, relay.New(postgres.NewOutboxStore(db), pub, relayConfig(), quiet))
+	start(t, relay.New(postgres.NewOutboxStore(db), shared(pub), relayConfig(), quiet))
 
 	waitFor(t, "rows released with a reason", func() bool {
 		return count(t, db.Pool(), `SELECT count(*) FROM outbox WHERE state = 'NEW' AND failure_reason = 'PUBLISH_FAILED' AND retries >= 1`) == 5
@@ -149,7 +152,7 @@ func TestRelayGivesUpAfterMaxAttempts(t *testing.T) {
 	pub.failing.Store(true)
 	cfg := relayConfig()
 	cfg.MaxAttempts = 2
-	start(t, relay.New(postgres.NewOutboxStore(db), pub, cfg, quiet))
+	start(t, relay.New(postgres.NewOutboxStore(db), shared(pub), cfg, quiet))
 
 	waitFor(t, "rows dead", func() bool {
 		return count(t, db.Pool(), `SELECT count(*) FROM outbox WHERE state = 'DEAD' AND failure_reason = 'MAX_ATTEMPTS_EXCEEDED'`) == 2
@@ -179,7 +182,7 @@ func TestKilledRelayIsRecovered(t *testing.T) {
 		InboxStuckMargin: time.Second, Backoff: backoff,
 	}, quiet)
 	start(t, janitor)
-	start(t, relay.New(outbox, queue, relayConfig(), quiet))
+	start(t, relay.New(outbox, shared(queue), relayConfig(), quiet))
 
 	waitFor(t, "all rows published", func() bool {
 		return count(t, db.Pool(), `SELECT count(*) FROM outbox WHERE state = 'PUBLISHED'`) == 30
@@ -328,7 +331,7 @@ func TestBrokerRestartLosesNothing(t *testing.T) {
 	// The outage must fit inside the attempt cap, or the rows would end DEAD by design.
 	cfg := relayConfig()
 	cfg.MaxAttempts = 1000
-	start(t, relay.New(postgres.NewOutboxStore(db), rabbitmq.NewPublisher(mq, 2*time.Second), cfg, quiet))
+	start(t, relay.New(postgres.NewOutboxStore(db), func() ports.Publisher { return rabbitmq.NewPublisher(mq, 2*time.Second) }, cfg, quiet))
 
 	seed(t, db, wave)
 	broker.Restart(t)

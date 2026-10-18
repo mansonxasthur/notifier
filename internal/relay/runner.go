@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// runner runs a loop in a goroutine and stops it between iterations, so a batch that has
-// started always finishes before the process exits.
+// runner runs a loop in one or more goroutines and stops them between iterations, so a
+// batch that has started always finishes before the process exits.
 type runner struct {
 	name string
 
@@ -25,11 +25,16 @@ func newRunner(name string) *runner {
 
 func (r *runner) Name() string { return r.name }
 
-// start launches loop, which must return soon after stop is closed.
-func (r *runner) start(loop func(stop <-chan struct{})) {
+// start launches n copies of loop, each of which must return soon after stop is closed.
+// loop gets the index of its copy.
+func (r *runner) start(n int, loop func(worker int, stop <-chan struct{})) {
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() { loop(i, r.stop) })
+	}
 	go func() {
-		defer close(r.done)
-		loop(r.stop)
+		wg.Wait()
+		close(r.done)
 	}()
 }
 

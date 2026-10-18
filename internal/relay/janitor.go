@@ -45,7 +45,7 @@ func NewJanitor(outbox ports.OutboxStore, inbox ports.InboxStore, checker ports.
 // Start implements lifecycle.Component.
 func (j *Janitor) Start(ctx context.Context) error {
 	ctx = context.WithoutCancel(ctx)
-	j.start(func(stop <-chan struct{}) {
+	j.start(1, func(_ int, stop <-chan struct{}) {
 		for wait(stop, j.cfg.Interval) {
 			j.SweepOutbox(ctx)
 			j.SweepInbox(ctx)

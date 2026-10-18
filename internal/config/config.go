@@ -81,7 +81,9 @@ type Backoff struct {
 type Relay struct {
 	PollInterval time.Duration `yaml:"poll_interval"`
 	BatchSize    int           `yaml:"batch_size"`
-	MaxAttempts  int           `yaml:"max_attempts"`
+	// Workers is how many claim-and-publish loops one relay runs.
+	Workers     int `yaml:"workers"`
+	MaxAttempts int `yaml:"max_attempts"`
 	// ConfirmTimeout bounds the wait for the broker to confirm a published batch.
 	ConfirmTimeout time.Duration `yaml:"confirm_timeout"`
 	Backoff        Backoff       `yaml:"backoff"`
@@ -298,6 +300,9 @@ func (r Relay) validate() []error {
 	}
 	if r.BatchSize <= 0 {
 		bad("relay.batch_size must be positive")
+	}
+	if r.Workers <= 0 {
+		bad("relay.workers must be positive")
 	}
 	if r.MaxAttempts <= 0 {
 		bad("relay.max_attempts must be positive")

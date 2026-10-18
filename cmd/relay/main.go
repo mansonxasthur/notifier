@@ -11,6 +11,7 @@ import (
 	"github.com/mansonxasthur/notifier/internal/app"
 	"github.com/mansonxasthur/notifier/internal/config"
 	"github.com/mansonxasthur/notifier/internal/lifecycle"
+	"github.com/mansonxasthur/notifier/internal/ports"
 	"github.com/mansonxasthur/notifier/internal/relay"
 )
 
@@ -32,9 +33,11 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	}
 
 	outbox := postgres.NewOutboxStore(db)
-	r := relay.New(outbox, rabbitmq.NewPublisher(mq, cfg.Relay.ConfirmTimeout), relay.Config{
+	newPublisher := func() ports.Publisher { return rabbitmq.NewPublisher(mq, cfg.Relay.ConfirmTimeout) }
+	r := relay.New(outbox, newPublisher, relay.Config{
 		PollInterval: cfg.Relay.PollInterval,
 		BatchSize:    cfg.Relay.BatchSize,
+		Workers:      cfg.Relay.Workers,
 		MaxAttempts:  cfg.Relay.MaxAttempts,
 		Backoff:      backoff,
 	}, log)
