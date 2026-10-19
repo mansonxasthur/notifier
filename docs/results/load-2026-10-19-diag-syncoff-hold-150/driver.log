@@ -1,0 +1,34 @@
+time=2026-10-19T06:47:11.033+03:00 level=INFO msg=warm-up for=15s run=r1792381631
+time=2026-10-19T06:47:25.735+03:00 level=INFO msg=measuring for=5m0s recipients_per_s=150
+time=2026-10-19T06:52:25.769+03:00 level=INFO msg="waiting for the system to drain" timeout=2m0s
+# diag-syncoff-hold-150
+
+Run `r1792381631`, started 2026-10-19T06:47:11+03:00. Setup is in `params.json`; queries and raw answers in `sql.txt`; every metric sample in `samples.csv`.
+
+## Load
+
+- 150 recipients/s x 3 channels = **450 deliveries/s** target, in requests of 100 recipients (1 requests/s), for 5m0s after a 15s warm-up.
+- Requests scheduled 451; answered map[202:451]; transport errors 0; **skipped by the driver 0** (in-flight limit 2000); latest request left 13ms late.
+- Deliveries the API accepted: 135300 (target 135300). HTTP latency of answered requests: p50 29ms, p99 224ms, max 671ms.
+
+## Request to ACCEPTED (from `accepted_at - created_at`, exact)
+
+| Deliveries | Count | p50 | p95 | p99 | max | p99 vs 5 s |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| first attempt (primary provider, no retry) | 106654 | 0.160 s | 2.964 s | 4.225 s | 4.914 s | within |
+| retried or failed over | 8731 | 3.242 s | 5.087 s | 6.081 s | 6.755 s | **over** |
+
+## Outcome
+
+- Stored 135300 deliveries (135300 expected from accepted requests); 115385 have `accepted_at`.
+  - DELIVERED: 118269
+  - FAILED: 17031
+- After the last request the system took 600ms to settle (drained).
+
+## Metrics (scraped every 1s, 0 scrapes failed)
+
+- Queue wait, sms (47400 messages including the warm-up; estimated from buckets, so shape only): p50 0.044 s, p99 4.507 s.
+- Queue wait, email (47400 messages including the warm-up; estimated from buckets, so shape only): p50 0.032 s, p99 4.439 s.
+- Queue wait, whatsapp (47400 messages including the warm-up; estimated from buckets, so shape only): p50 0.051 s, p99 4.530 s.
+- Peak queue depth: 681 (notifier_queue_depth{channel=sms}).
+- Highest breaker state seen: 2 (notifier_breaker_state{provider=email-a}); 0 closed, 1 half-open, 2 open.

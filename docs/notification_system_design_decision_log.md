@@ -323,6 +323,23 @@ The small metrics set named under Observability, and how it is built. It changes
 - **Counters** for requests by status and for 429s on the Dispatcher.
 - **Not measured:** per-attempt provider latency and outbox pickup delay; the first is in the logs, and the second shows as queue depth and accept latency together.
 
+## Database pool size (Phase 7)
+
+Each process holds one pgx connection pool, and its size is `database.max_conns`, shipped as 20. The library default is the larger of 4 and the core count, which is below the 150 sends a sender can have in flight (prefetch 50 on each of three queues) and the 8 relay workers. The value is configuration because the right number depends on the database: every process of every service draws from Postgres's `max_connections` (100 by default), so the pools of all instances together must stay under it (three services at 20 use 60).
+
+The load runs did **not** show the pool to be the limit on the test machine: at 200 recipients per second, 4 and 30 connections gave the same p99 (10.6 s and 10.4 s). The limit lay elsewhere (see the load results). The pool is sized to the services' concurrency so that it does not become the limit on a faster disk, not because a run showed a gain.
+
+## Load test method and findings (Phase 7)
+
+The method is decided here; the numbers and their setups are in `docs/results/README.md`, which is the source for any figure.
+
+- **Driver.** A small Go driver (`cmd/loadtest`) with an open loop: requests leave on schedule whether or not earlier ones returned, and a request that finds the driver's in-flight limit reached is skipped and counted, so a run that was limited by the driver says so. Latency is request to `ACCEPTED`, exact, from `accepted_at - created_at`, for the measured phase only. First attempt means accepted by the channel's primary provider with no retry spent.
+- **Rig.** The simulated provider and the driver are not the system under test, so they are pinned to their own cores (`docker-compose.loadtest.yml`, `SUT_CPUS`, `SIM_CPUS`). With one core for the simulator at about 450 deliveries/s it answered slower than the providers' 1 s timeout, and breakers opened. That was a limit of the rig, so those runs are kept only as the contrast. The runs to quote use two cores each. Services log warnings only during runs, since per-delivery Info lines cost real CPU at this rate.
+- **A step is not a hold.** A 30-second step passed at a rate that failed when held for 5 minutes. A rate is reported as sustained only if it was held for 5 minutes.
+- **Finding.** On the 4-core test machine, with two cores for the system, 450 deliveries/s was held for 5 minutes with first-attempt p99 0.64 s and no failures. At 525/s p99 stayed inside 5 s but deliveries started failing; at 600/s p99 passed the target. Postgres is where throughput stops growing; why it plateaus was not isolated. This does not show 500K a second. The scale-up route is the one already in the document: batch the per-delivery transactions, partition or shard Postgres, and shard or replace the queue.
+- **Finding, breaker amplification.** When a provider misbehaves on a few percent of calls, the 5-consecutive-failures breaker opens repeatedly, and because a delivery fails at once when the last provider's breaker is open, 6% misbehaving calls produced 15% failed deliveries and the shipped random weights 91%. This is the Phase 5 decision working as designed and as recorded; the run shows its cost. Tuning it (a failure ratio over a window instead of a count in a row, or a retry before failing) is future work, not done here.
+- **Overload.** Above the global limit the Dispatcher answers 429 with `Retry-After` and the accepted work keeps its latency.
+
 ## Alternative considered: Kafka-first ingestion
 
 The alternative was to let producers write straight to Kafka and rely only on an inbox at the consumer for de-duplication, with no HTTP Dispatcher, outbox, or relay. It was considered and not chosen. The current design (HTTP Dispatcher, transactional outbox, RabbitMQ queue) was kept, and Kafka remains the documented scale-up path.

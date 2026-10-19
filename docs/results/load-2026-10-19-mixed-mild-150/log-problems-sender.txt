@@ -1,0 +1,20 @@
+   5801 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"sms-a","claim":1,"failure_class":"provider","outcome":"switched","why":"breaker_open","next_provider":"sms-b"}
+   4099 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"email-a","claim":1,"failure_class":"provider","outcome":"switched","why":"breaker_open","next_provider":"email-b"}
+   2943 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"sms-b","claim":2,"failure_class":"provider","outcome":"failed","reason":"NO_PROVIDER_AVAILABLE"}
+   2096 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"email-b","claim":2,"failure_class":"provider","outcome":"failed","reason":"NO_PROVIDER_AVAILABLE"}
+   1518 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-a","claim":1,"failure_class":"provider","outcome":"switched","why":"breaker_open","next_provider":"whatsapp-b"}
+    211 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-a","claim":2,"failure_class":"provider","outcome":"switched","why":"retries_exhausted","next_provider":"whatsapp-b","error":"provider failure: status 503"}
+    148 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"email-a","claim":2,"failure_class":"provider","outcome":"switched","why":"retries_exhausted","next_provider":"email-b","error":"provider failure: status 503"}
+    116 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"sms-a","claim":2,"failure_class":"provider","outcome":"switched","why":"retries_exhausted","next_provider":"sms-b","error":"provider failure: status 503"}
+     54 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"email-b","claim":3,"failure_class":"provider","outcome":"failed","reason":"PROVIDER_FAILED","error":"provider failure: status 503"}
+     46 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"sms-b","claim":3,"failure_class":"provider","outcome":"failed","reason":"NO_PROVIDER_AVAILABLE"}
+     42 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"sms-b","claim":3,"failure_class":"provider","outcome":"failed","reason":"PROVIDER_FAILED","error":"provider failure: status 503"}
+     39 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"sms-b","claim":2,"failure_class":"timeout","outcome":"unresolved","why":"lookup_error","error":"the lookup gave no usable answer (0)"}
+     36 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-b","claim":3,"failure_class":"provider","outcome":"failed","reason":"PROVIDER_FAILED","error":"provider failure: status 503"}
+     27 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"email-b","claim":3,"failure_class":"provider","outcome":"failed","reason":"NO_PROVIDER_AVAILABLE"}
+     20 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-b","claim":2,"failure_class":"timeout","outcome":"unresolved","why":"lookup_error","error":"the lookup gave no usable answer (0)"}
+     17 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"email-b","claim":2,"failure_class":"timeout","outcome":"unresolved","why":"lookup_error","error":"the lookup gave no usable answer (0)"}
+      4 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"email-b","claim":4,"failure_class":"provider","outcome":"failed","reason":"PROVIDER_FAILED","error":"provider failure: status 503"}
+      4 sender-1  | {"level":"WARN","msg":"circuit breaker opened","service":"sender","provider":"sms-b"}
+      4 sender-1  | {"level":"WARN","msg":"circuit breaker opened","service":"sender","provider":"sms-a"}
+      3 sender-1  | {"level":"WARN","msg":"circuit breaker opened","service":"sender","provider":"email-a"}
