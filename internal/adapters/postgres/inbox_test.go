@@ -138,15 +138,42 @@ func TestInboxStuck(t *testing.T) {
 	t.Run("requeue is fenced by claim_count", func(t *testing.T) {
 		wrong := stuck[0]
 		wrong.ClaimCount = 9
-		if ok, err := store.Requeue(ctx, wrong, time.Now()); err != nil || ok {
+		if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET failure_class = 'provider' WHERE delivery_id = $1`, stuck[0].DeliveryID); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := store.Requeue(ctx, wrong, domain.FailureTimeout, time.Now()); err != nil || ok {
 			t.Errorf("stale requeue = %v, %v, want false", ok, err)
 		}
+		if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE delivery_id = $1 AND failure_class = 'provider' AND retries = 0`, stuck[0].DeliveryID); got != 1 {
+			t.Error("a stale requeue must write nothing")
+		}
 		next := time.Now().Add(time.Hour)
-		if ok, err := store.Requeue(ctx, stuck[0], next); err != nil || !ok {
+		if ok, err := store.Requeue(ctx, stuck[0], domain.FailureTimeout, next); err != nil || !ok {
 			t.Fatalf("requeue = %v, %v, want true", ok, err)
 		}
 		if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE state = 'WAITING_RETRY' AND next_attempt_at > now()`); got != 1 {
 			t.Error("row should wait for retry in the future")
+		}
+		if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE state = 'WAITING_RETRY' AND retries = 1 AND failure_class = 'timeout'`); got != 1 {
+			t.Error("a requeue must spend a retry and record the failure class")
+		}
+	})
+
+	t.Run("an empty class is stored as NULL", func(t *testing.T) {
+		if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET state = 'PROCESSING', retries = 0, failure_class = 'provider' WHERE delivery_id = $1`, ids[0]); err != nil {
+			t.Fatal(err)
+		}
+		again := stuck[0]
+		again.Retries = 0
+		if ok, err := store.Requeue(ctx, again, domain.FailureNone, time.Now()); err != nil || !ok {
+			t.Fatalf("requeue = %v, %v, want true", ok, err)
+		}
+		if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE delivery_id = $1 AND failure_class IS NULL`, ids[0]); got != 1 {
+			t.Error("an empty class must be stored as NULL, not as an empty string")
+		}
+		// Back to the state the next subtest expects.
+		if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET state = 'WAITING_RETRY' WHERE delivery_id = $1`, ids[0]); err != nil {
+			t.Fatal(err)
 		}
 	})
 

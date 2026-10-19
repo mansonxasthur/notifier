@@ -180,13 +180,13 @@ func (s *InboxStore) ListStuck(ctx context.Context, provider string, olderThan t
 }
 
 const requeueInbox = `
-UPDATE inbox SET state = $4, next_attempt_at = $3, retries = retries + 1, last_try = now()
+UPDATE inbox SET state = $4, next_attempt_at = $3, retries = retries + 1, failure_class = NULLIF($7::text, ''), last_try = now()
 WHERE delivery_id = $1 AND state = $5 AND claim_count = $2 AND retries = $6`
 
 // Requeue implements ports.InboxStore.
-func (s *InboxStore) Requeue(ctx context.Context, st domain.StuckInbox, next time.Time) (bool, error) {
+func (s *InboxStore) Requeue(ctx context.Context, st domain.StuckInbox, class domain.FailureClass, next time.Time) (bool, error) {
 	tag, err := s.db.Pool().Exec(ctx, requeueInbox, st.DeliveryID, st.ClaimCount, next,
-		domain.InboxWaitingRetry, domain.InboxProcessing, st.Retries)
+		domain.InboxWaitingRetry, domain.InboxProcessing, st.Retries, class)
 	if err != nil {
 		return false, fmt.Errorf("requeue inbox: %w", err)
 	}

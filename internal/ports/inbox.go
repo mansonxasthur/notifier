@@ -21,11 +21,12 @@ type InboxStore interface {
 	ClaimDue(ctx context.Context, channel domain.Channel, limit int, limits domain.ClaimLimits) ([]domain.DueInbox, error)
 	// ListStuck returns up to limit rows of the provider left in PROCESSING longer than olderThan.
 	ListStuck(ctx context.Context, provider string, olderThan time.Duration, limit int) ([]domain.StuckInbox, error)
-	// Requeue moves a stuck row to WAITING_RETRY, due at next, and adds one to retries, as a
-	// failed attempt does. It is fenced by the claim and by the retries the row was listed with,
-	// so a retry budget read from a stale listing is never spent twice. False means the row
-	// changed since it was listed.
-	Requeue(ctx context.Context, s domain.StuckInbox, next time.Time) (bool, error)
+	// Requeue moves a stuck row to WAITING_RETRY, due at next, adds one to retries and records
+	// the failure class, replacing any earlier one, as a failed attempt does (an empty class is
+	// stored as NULL). It is fenced by the claim and by the retries the row was listed with, so a
+	// retry budget read from a stale listing is never spent twice. False means the row changed
+	// since it was listed, and nothing was written.
+	Requeue(ctx context.Context, s domain.StuckInbox, class domain.FailureClass, next time.Time) (bool, error)
 	// Complete ends a row this sender holds DONE and moves its delivery to ACCEPTED, because
 	// the provider took the message. claimCount is the claim's fencing token. False means the
 	// claim is stale: the row was reclaimed since. A delivery that already left PENDING (an
