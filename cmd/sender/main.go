@@ -23,7 +23,7 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	if err := cfg.Require(config.Postgres, config.RabbitMQ); err != nil {
 		return nil, err
 	}
-	db := postgres.New(cfg.DatabaseURL)
+	db := postgres.New(cfg.DatabaseURL).WithMaxConns(cfg.Database.MaxConns)
 	mq := rabbitmq.New(cfg.AMQPURL)
 
 	inbox := postgres.NewInboxStore(db)

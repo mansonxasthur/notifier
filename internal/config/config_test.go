@@ -134,6 +134,8 @@ func TestValidateRejects(t *testing.T) {
 	}{
 		{"no shutdown timeout", func(c *Config) { c.ShutdownTimeout = 0 }, "shutdown_timeout"},
 		{"no listen address", func(c *Config) { c.HTTP.Addr = "" }, "http.addr"},
+		{"no connections", func(c *Config) { c.Database.MaxConns = 0 }, "database.max_conns"},
+		{"too many connections", func(c *Config) { c.Database.MaxConns = 1001 }, "database.max_conns"},
 		{"batch limit zero", func(c *Config) { c.BatchLimit = 0 }, "batch_limit"},
 		{"chunk size zero", func(c *Config) { c.Accept.ChunkSize = 0 }, "accept.chunk_size"},
 		{"body cap zero", func(c *Config) { c.Accept.MaxBodyBytes = 0 }, "accept.max_body_bytes"},

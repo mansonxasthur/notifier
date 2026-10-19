@@ -9,6 +9,11 @@ shutdown_timeout: 20s
 http:
   addr: ":8080"
 
+# Connections one process opens to Postgres. Every instance of every service draws from the
+# database's max_connections (100 by default), so keep the sum under it.
+database:
+  max_conns: 20
+
 # Largest accepted request, in recipients.
 batch_limit: 3000
 
