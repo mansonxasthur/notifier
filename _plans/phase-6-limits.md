@@ -87,10 +87,11 @@ Edit `docs/notification_system_design_decision_log.md`:
 - **`RegisterNotifications` refuses a nil limiter**, so intake can never be unlimited by omission.
 - **`newStack` in `internal/e2e` takes config changes**, which the two new end-to-end cases use.
 
+- **A second migration, `20261019110000_add_inbox_channel`**, copies the delivery's channel onto the inbox row and rebuilds the due-row index to start with it, so a channel's scan reads only its own rows. The retry scan now rescans at once whenever it found any row, not only on a full batch, because rows ended by the claim cap are consumed from the batch without being returned. `ClaimLimits` replaced the plain `maxClaims` argument of `Claim`, `ClaimDue`, `NewIntake` and `NewScan`, and the breaker also replaces a probe that never answers and ignores results reported without a ticket.
 - **Follow-ups added after review, at the engineer's request:** breaker tickets (only the probe closes or reopens a half-open breaker), a deadline check in the janitor, a cap on free deferrals (`sender.max_deferrals`), and a retry scan that runs per channel with 500 rows per channel (`sender.scan_batch`, was 50 across all channels).
 
 Not built, as planned: a shared (Redis) provider bucket, a reservation scheme for deferred rows, and per-service quotas.
 
 Known limits, recorded in the decision log: the provider bucket is per sender, so N senders can send a provider up to N times its rate; a deep backlog is re-claimed and re-deferred in rounds, so database work grows with the backlog; a Redis timeout after the charge is taken is also charged locally; with N Dispatchers and Redis down the effective global limit is up to N times the rate; a replayed or failed request still costs its tokens.
 
-Review findings left: the scan still starts one goroutine per claimed row, now bounded by `scan_batch` per channel.
+Review findings left: the scan still starts one goroutine per claimed row, now bounded by `scan_batch` per channel, so up to 1,500 sends per sender share the database pool, whose size is not configured; deferrals past `max_deferrals` cost a claim at once, a cliff rather than a ramp; the three channel loops wake together and retry in step if the database is down; `domain.Claims` and `DefaultMaxDeferrals` exist for callers without config, mostly tests, and repeat the YAML default.

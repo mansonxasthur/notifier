@@ -26,7 +26,8 @@ Workflow followed: issue #11, branch `feat/11-limits`, decision log written befo
 7. **API enforcement.** The handler charges after validation and answers 429 with `Retry-After`; the Redis client became atomic after the review found a race with the lazy scripter.
 8. **Sender token bucket.** `ProviderLimits`, `InboxStore.Defer` and the `deferrals` column; the review moved the token after the breaker and capped the wait at the deadline.
 9. **End-to-end cases.** A burst refused and then admitted after `Retry-After`, and a spike drained at the providers' rate.
-10. **Docs.** This log, the status line, the plan's checklist and its deviations.
+10. **Follow-ups.** At the engineer's request, the items first left as accepted: the breaker tickets, the janitor's deadline check, a cap on free deferrals, and a scan per channel with 500 rows per channel. Reviews of these found a stuck-probe risk, an index that would walk other channels' rows, and a batch test that dead rows defeated; all three were fixed.
+11. **Docs.** This log, the status line, the plan's checklist and its deviations.
 
 Departures from the written plan are listed at the end of `_plans/phase-6-limits.md`.
 
@@ -43,7 +44,11 @@ One commit per step, each after `make check` and a `code-review` pass:
 7. `7f2e9dc` API enforcement
 8. `b408747` sender token bucket
 9. `7ef5704` only the probe ends a limiter outage (a review finding on the end-to-end step)
-10. end-to-end cases and docs (the last commit)
+10. `b3aa7c3` end-to-end cases and docs
+11. `51af597`, `395aa66` breaker tickets, then lost-probe replacement and ticketless results (follow-up the engineer asked for)
+12. `22ecabc` the janitor honours the deadline
+13. `83289d4` per-channel retry scan (500 a channel), `inbox.channel`, and the cap on free deferrals
+14. docs (the last commit)
 
 ## Verification
 
