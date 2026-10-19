@@ -10,6 +10,8 @@
 #   GLOBAL_BURST [1000000]   limits.global.burst
 #   DB_MAX_CONNS [20]        database.max_conns of every service
 #   SUT_CPUS [0-2], SIM_CPUS [3]  cores for the system under test, and for the simulator and driver
+#   MESSAGE_SIZE [shipped]   relay.message_size, delivery ids per queue message
+#   PREFETCH [shipped]       sender.prefetch, unacknowledged messages per queue
 #   PG_SYNC_COMMIT [on]      off only to diagnose; see docker-compose.loadtest.yml
 #   KEEP_STACK [0]           1 leaves the stack up afterwards
 # The config is the shipped one with those lines changed; the result is saved as config.yaml
@@ -37,6 +39,14 @@ sed -e "s/^  mode: random$/  mode: ${sim_mode}/" \
 grep -q "^  mode: ${sim_mode}$" "$out/config.yaml" || { echo "simprovider.mode was not set to ${sim_mode}: is config/config.yaml formatted as run.sh expects?" >&2; exit 1; }
 grep -q "global: {rate: ${grate}, burst: ${gburst}}" "$out/config.yaml" || { echo "limits.global was not set: is config/config.yaml formatted as run.sh expects?" >&2; exit 1; }
 grep -q "^  max_conns: ${DB_MAX_CONNS:-20}$" "$out/config.yaml" || { echo "database.max_conns was not set: is config/config.yaml formatted as run.sh expects?" >&2; exit 1; }
+if [ -n "${MESSAGE_SIZE:-}" ]; then
+  sed -i -e "s/^  message_size: [0-9]*$/  message_size: ${MESSAGE_SIZE}/" "$out/config.yaml"
+  grep -q "^  message_size: ${MESSAGE_SIZE}$" "$out/config.yaml" || { echo "relay.message_size was not set" >&2; exit 1; }
+fi
+if [ -n "${PREFETCH:-}" ]; then
+  sed -i -e "s/^  prefetch: [0-9]*$/  prefetch: ${PREFETCH}/" "$out/config.yaml"
+  grep -q "^  prefetch: ${PREFETCH}$" "$out/config.yaml" || { echo "sender.prefetch was not set" >&2; exit 1; }
+fi
 if [ -n "${SIM_WEIGHTS:-}" ]; then
   sed -i -e "s/^  weights: {.*}$/  weights: ${SIM_WEIGHTS}/" "$out/config.yaml"
 fi

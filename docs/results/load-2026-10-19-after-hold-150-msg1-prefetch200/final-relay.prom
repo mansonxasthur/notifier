@@ -1,0 +1,5 @@
+# HELP notifier_queue_depth Messages waiting in a channel's queue.
+# TYPE notifier_queue_depth gauge
+notifier_queue_depth{channel="email"} 0
+notifier_queue_depth{channel="sms"} 0
+notifier_queue_depth{channel="whatsapp"} 0
