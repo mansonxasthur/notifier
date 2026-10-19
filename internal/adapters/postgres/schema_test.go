@@ -47,7 +47,7 @@ func TestSchema(t *testing.T) {
 		}
 		sort.Strings(got)
 		want := []string{
-			"deliveries.failure_reason", "inbox.failure_class", "inbox.failure_reason", "inbox.next_attempt_at",
+			"deliveries.accepted_at", "deliveries.failure_reason", "inbox.failure_class", "inbox.failure_reason", "inbox.next_attempt_at",
 			"outbox.failure_reason", "outbox.next_attempt_at",
 		}
 		if strings.Join(got, ",") != strings.Join(want, ",") {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mansonxasthur/notifier/internal/adapters/postgres"
+	"github.com/mansonxasthur/notifier/internal/adapters/prometheus"
 	"github.com/mansonxasthur/notifier/internal/adapters/ratelimit"
 	"github.com/mansonxasthur/notifier/internal/adapters/redis"
 	"github.com/mansonxasthur/notifier/internal/adapters/webhookauth"
@@ -67,7 +68,9 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	if err != nil {
 		return nil, err
 	}
-	srv := httpserver.New("http", cfg.HTTP.Addr, mux, log)
+	metrics := prometheus.New()
+	mux.Handle("GET /metrics", metrics.Handler())
+	srv := httpserver.New("http", cfg.HTTP.Addr, metrics.Instrument(mux), log)
 	// The server starts last so it only listens once its dependencies are connected.
 	return []lifecycle.Component{db, cache, srv}, nil
 }

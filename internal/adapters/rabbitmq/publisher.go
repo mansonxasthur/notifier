@@ -77,6 +77,7 @@ func (p *Publisher) Publish(ctx context.Context, c domain.Channel, ids []int64) 
 			DeliveryMode: amqp.Persistent,
 			ContentType:  "text/plain",
 			Body:         []byte(strconv.FormatInt(id, 10)),
+			Headers:      amqp.Table{EnqueuedHeader: time.Now().UnixNano()},
 		})
 		if err != nil {
 			errs = append(errs, fmt.Errorf("publish %d: %w", id, err))

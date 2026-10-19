@@ -18,6 +18,8 @@ type DeliveryDetail struct {
 	Content   Content
 	ExpiresAt time.Time
 	State     DeliveryState
+	// CreatedAt is when the request that made this delivery was accepted.
+	CreatedAt time.Time
 }
 
 // Notification is a validated request, ready to store. The store sets ID.

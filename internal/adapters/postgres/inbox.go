@@ -199,7 +199,7 @@ WITH done AS (
   WHERE delivery_id = $1 AND state = $4 AND claim_count = $2
   RETURNING delivery_id
 ), accepted AS (
-  UPDATE deliveries d SET state = $5, updated_at = now()
+  UPDATE deliveries d SET state = $5, accepted_at = now(), updated_at = now()
   FROM done WHERE d.id = done.delivery_id AND d.state = $6
 )
 SELECT true FROM done`
