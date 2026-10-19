@@ -1,0 +1,6 @@
+     20 api-1  | {"level":"ERROR","msg":"apply webhook","service":"api","provider":"email-a","error":"apply webhook: context canceled"}
+     12 api-1  | {"level":"ERROR","msg":"apply webhook","service":"api","provider":"whatsapp-a","error":"apply webhook: context canceled"}
+      7 api-1  | {"level":"ERROR","msg":"apply webhook","service":"api","provider":"sms-a","error":"apply webhook: context canceled"}
+      3 api-1  | {"level":"ERROR","msg":"apply webhook","service":"api","provider":"sms-a","error":"apply webhook: timeout: context already done: context canceled"}
+      3 api-1  | {"level":"ERROR","msg":"apply webhook","service":"api","provider":"email-a","error":"apply webhook: timeout: context already done: context canceled"}
+      1 api-1  | {"level":"ERROR","msg":"apply webhook","service":"api","provider":"whatsapp-a","error":"apply webhook: timeout: context already done: context canceled"}

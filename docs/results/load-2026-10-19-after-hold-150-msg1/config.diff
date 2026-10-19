@@ -1,0 +1,8 @@
+50c50
+<   mode: random
+---
+>   mode: succeed
+134c134
+<   message_size: 100
+---
+>   message_size: 1

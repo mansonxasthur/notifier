@@ -1,0 +1,2 @@
+      1 api-1  | {"level":"ERROR","msg":"apply webhook","service":"api","provider":"whatsapp-a","error":"apply webhook: context canceled"}
+      1 api-1  | {"level":"ERROR","msg":"apply webhook","service":"api","provider":"sms-b","error":"apply webhook: context canceled"}

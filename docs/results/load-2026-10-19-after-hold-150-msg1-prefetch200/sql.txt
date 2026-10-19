@@ -1,0 +1,19 @@
+-- states
+SELECT state, count(*), count(accepted_at) FROM deliveries WHERE recipient_id LIKE $1 GROUP BY state ORDER BY state
+-- $1 = "r1792389895-m-%"
+DELIVERED      135300 deliveries,   135290 with accepted_at
+
+-- request to ACCEPTED, seconds (accepted_at - created_at)
+SELECT first, count(*),
+       percentile_cont(0.50) WITHIN GROUP (ORDER BY lat),
+       percentile_cont(0.95) WITHIN GROUP (ORDER BY lat),
+       percentile_cont(0.99) WITHIN GROUP (ORDER BY lat),
+       max(lat)
+FROM (
+  SELECT extract(epoch FROM d.accepted_at - d.created_at) AS lat,
+         (i.retries = 0 AND i.provider = ANY($2)) AS first
+  FROM deliveries d JOIN inbox i ON i.delivery_id = d.id
+  WHERE d.recipient_id LIKE $1 AND d.accepted_at IS NOT NULL
+) t GROUP BY first
+-- $1 = "r1792389895-m-%", $2 = [sms-a email-a whatsapp-a]
+first=true  n=135290   p50=0.1425 p95=0.4193 p99=0.5090 max=0.7219
