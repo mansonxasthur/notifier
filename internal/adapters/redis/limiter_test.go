@@ -15,7 +15,7 @@ import (
 	"github.com/mansonxasthur/notifier/internal/ports"
 )
 
-func client(t *testing.T, url string) *goredis.Client {
+func client(t testing.TB, url string) *goredis.Client {
 	t.Helper()
 	opts, err := goredis.ParseURL(url)
 	if err != nil {

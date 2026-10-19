@@ -1,0 +1,28 @@
+# go test -bench . -benchmem ./...  (2026-10-19, base commit 11dd319 plus the benchmark files of branch test/15-gaps-and-benchmarks, issue #15)
+# go version go1.26.3 linux/amd64; Intel(R) Core(TM) i5-4570 CPU @ 3.20GHz, 4 cores, 15 GB RAM; Postgres 17 and Redis 7 in testcontainers on the same machine
+goos: linux
+goarch: amd64
+pkg: github.com/mansonxasthur/notifier/internal/adapters/postgres
+cpu: Intel(R) Core(TM) i5-4570 CPU @ 3.20GHz
+BenchmarkCreate/deliveries=10-4     801	   1410931 ns/op	      7088 deliveries/s	   14551 B/op	     191 allocs/op
+BenchmarkCreate/deliveries=100-4     139	   8376654 ns/op	     11938 deliveries/s	  143534 B/op	    1489 allocs/op
+BenchmarkCreate/deliveries=1000-4      14	  72266711 ns/op	     13838 deliveries/s	 1384154 B/op	   14108 allocs/op
+BenchmarkOutboxClaimAndPublish-4      57	  20347255 ns/op	     24573 rows/s	  157199 B/op	    2038 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/mansonxasthur/notifier/internal/adapters/redis
+cpu: Intel(R) Core(TM) i5-4570 CPU @ 3.20GHz
+BenchmarkLimiterAllow-4   13887	     87749 ns/op	     485 B/op	      15 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/mansonxasthur/notifier/internal/domain
+cpu: Intel(R) Core(TM) i5-4570 CPU @ 3.20GHz
+BenchmarkBucketTake-4   	37369249	        32.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBucketTakeDenied-4   	63030826	        18.98 ns/op	       0 B/op	       0 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/mansonxasthur/notifier/internal/httpserver/requests
+cpu: Intel(R) Core(TM) i5-4570 CPU @ 3.20GHz
+BenchmarkValidate/recipients=10-4         	   28555	     76210 ns/op	    393648 deliveries/s	   17098 B/op	      98 allocs/op
+BenchmarkValidate/recipients=100-4        	    2041	    679168 ns/op	    441717 deliveries/s	  147968 B/op	     827 allocs/op
+BenchmarkValidate/recipients=1000-4       	     235	   8185026 ns/op	    366523 deliveries/s	 1695226 B/op	    8049 allocs/op

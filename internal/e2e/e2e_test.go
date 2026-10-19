@@ -7,10 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -93,6 +96,38 @@ type stack struct {
 	db     *postgres.Pool
 	apiURL string
 	simURL string
+	// sent holds the raw body of every send request the simulator received.
+	sent *sendLog
+}
+
+// sendLog records the bodies of the calls the simulator receives, as the provider saw them.
+type sendLog struct {
+	mu     sync.Mutex
+	bodies []string
+}
+
+func (l *sendLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.bodies)
+}
+
+// record wraps h so that every body posted to a send route is kept before h reads it.
+func (l *sendLog) record(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/send") {
+			b, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "read body", http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(b))
+			l.mu.Lock()
+			l.bodies = append(l.bodies, string(b))
+			l.mu.Unlock()
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 // newStack wires the whole stack from the shipped configuration. Each tune changes that
@@ -161,7 +196,8 @@ func newStack(t *testing.T, tune ...func(*config.Config)) *stack {
 	start(t, hooks)
 	simMux := http.NewServeMux()
 	simprovider.NewServer(cfg, hooks, quiet).Register(simMux)
-	simURL := serve(t, simMux)
+	sent := &sendLog{}
+	simURL := serve(t, sent.record(simMux))
 	cfg.SimulationURL = simURL
 
 	// The broker, the relay and the sender.
@@ -184,7 +220,7 @@ func newStack(t *testing.T, tune ...func(*config.Config)) *stack {
 	scan := sender.NewScan(inbox, attempt.Send, cfg.Sender.PollInterval, cfg.Sender.ScanBatch, cfg.Sender.ClaimLimits(), quiet)
 	start(t, sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, quiet), intake, scan))
 
-	return &stack{db: db, apiURL: apiURL, simURL: simURL}
+	return &stack{db: db, apiURL: apiURL, simURL: simURL, sent: sent}
 }
 
 const defaultKey = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
@@ -209,8 +245,14 @@ func (s *stack) submit(t *testing.T) int {
 // post sends the notification of submit under the given idempotency key and returns the raw answer.
 func (s *stack) post(t *testing.T, key string) (int, http.Header, []byte) {
 	t.Helper()
+	return s.postN(t, key, recipients)
+}
+
+// postN is post with n recipients.
+func (s *stack) postN(t *testing.T, key string, n int) (int, http.Header, []byte) {
+	t.Helper()
 	var rs []string
-	for i := range recipients {
+	for i := range n {
 		rs = append(rs, fmt.Sprintf(`{"recipient_id":"u_%03d","channels":{"sms":"+2010%08d","email":"u%03d@example.com"}}`, i, i, i))
 	}
 	body := fmt.Sprintf(`{"idempotency_key":%q,"type":"match_alert",
