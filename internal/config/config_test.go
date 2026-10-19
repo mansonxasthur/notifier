@@ -208,6 +208,8 @@ func TestValidateRejects(t *testing.T) {
 		{"janitor margin zero", func(c *Config) { c.Relay.Janitor.InboxStuckMargin = 0 }, "inbox_stuck_margin"},
 		{"relay confirm timeout zero", func(c *Config) { c.Relay.ConfirmTimeout = 0 }, "relay.confirm_timeout"},
 		{"sender prefetch zero", func(c *Config) { c.Sender.Prefetch = 0 }, "sender.prefetch"},
+		{"sender batch size zero", func(c *Config) { c.Sender.BatchSize = 0 }, "sender.batch_size"},
+		{"sender linger zero", func(c *Config) { c.Sender.Linger = 0 }, "sender.linger"},
 		{"sender scan batch zero", func(c *Config) { c.Sender.ScanBatch = 0 }, "sender.scan_batch"},
 		{"breaker threshold zero", func(c *Config) { c.Sender.Breaker.FailureThreshold = 0 }, "breaker.failure_threshold"},
 		{"breaker open_for zero", func(c *Config) { c.Sender.Breaker.OpenFor = 0 }, "breaker.open_for"},

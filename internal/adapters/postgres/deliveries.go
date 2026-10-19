@@ -28,6 +28,41 @@ SELECT d.channel, d.contact ->> 'address', d.expires_at, d.state, d.created_at, 
 FROM deliveries d JOIN notifications n ON n.id = d.notification_id
 WHERE d.id = $1`
 
+const loadDeliveries = `
+SELECT d.id, d.channel, d.contact ->> 'address', d.expires_at, d.state, d.created_at, n.content -> d.channel
+FROM deliveries d JOIN notifications n ON n.id = d.notification_id
+WHERE d.id = ANY($1)`
+
+// LoadMany implements ports.DeliveryStore.
+func (s *DeliveryStore) LoadMany(ctx context.Context, ids []int64) (map[int64]domain.DeliveryDetail, error) {
+	rows, err := s.db.Pool().Query(ctx, loadDeliveries, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load deliveries: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[int64]domain.DeliveryDetail, len(ids))
+	for rows.Next() {
+		var (
+			d       domain.DeliveryDetail
+			content []byte
+			expires time.Time
+		)
+		if err := rows.Scan(&d.ID, &d.Channel, &d.Contact, &expires, &d.State, &d.CreatedAt, &content); err != nil {
+			return nil, fmt.Errorf("load deliveries: %w", err)
+		}
+		var sc storedContent
+		if err := json.Unmarshal(content, &sc); err != nil {
+			return nil, fmt.Errorf("decode content of delivery %d: %w", d.ID, err)
+		}
+		d.Content, d.ExpiresAt = domain.Content(sc), expires
+		out[d.ID] = d
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load deliveries: %w", err)
+	}
+	return out, nil
+}
+
 // Load implements ports.DeliveryStore.
 func (s *DeliveryStore) Load(ctx context.Context, id int64) (domain.DeliveryDetail, error) {
 	var (

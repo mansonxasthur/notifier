@@ -191,6 +191,12 @@ type Sender struct {
 	MaxClaims    int           `yaml:"max_claims"`
 	// Prefetch is how many unacknowledged messages a sender holds per queue.
 	Prefetch int `yaml:"prefetch"`
+	// BatchSize is the most claims, loads or outcome writes the sender groups into one database
+	// call. Only messages in flight together can share a batch, so Prefetch should be a few times it.
+	BatchSize int `yaml:"batch_size"`
+	// Linger is how long a batch waits for more items before it is written, the latency one
+	// database stage adds when the sender is not busy.
+	Linger time.Duration `yaml:"linger"`
 	// ScanBatch is how many due retries one scan claims per channel, and so how many sends one
 	// channel can have in flight from the scan.
 	ScanBatch int `yaml:"scan_batch"`
@@ -386,6 +392,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Sender.Prefetch <= 0 {
 		bad("sender.prefetch must be positive")
+	}
+	if c.Sender.BatchSize <= 0 {
+		bad("sender.batch_size must be positive")
+	}
+	if c.Sender.Linger <= 0 {
+		bad("sender.linger must be positive")
 	}
 	if c.Sender.ScanBatch <= 0 {
 		bad("sender.scan_batch must be positive")

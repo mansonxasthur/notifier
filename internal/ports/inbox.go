@@ -15,6 +15,10 @@ type InboxStore interface {
 	// provider the row now carries; anything else is a duplicate (the scan owns a retry that
 	// is not yet due). A claim that would pass limits.MaxClaims ends the row DEAD and the delivery FAILED.
 	Claim(ctx context.Context, deliveryID int64, provider string, limits domain.ClaimLimits) (domain.InboxClaim, error)
+	// ClaimMany claims many deliveries in one transaction, with the rules of Claim for each. The
+	// result at i is for ids[i]; an id with no delivery gets InboxClaimMissing. One id twice is
+	// claimed once, and the second place reports a duplicate.
+	ClaimMany(ctx context.Context, ids []int64, provider string, limits domain.ClaimLimits) ([]domain.InboxClaim, error)
 	// ClaimDue claims up to limit rows of the channel in WAITING_RETRY whose next_attempt_at has
 	// passed, moving them to PROCESSING, so concurrent senders never take the same row. A row
 	// that would pass limits.MaxClaims ends DEAD and its delivery FAILED, and is not returned.
@@ -49,6 +53,12 @@ type InboxStore interface {
 	// Unresolve ends a row this sender holds DEAD and its PENDING delivery UNRESOLVED, because
 	// the last provider's answer cannot be known. False means the claim is stale.
 	Unresolve(ctx context.Context, deliveryID int64, claimCount int, class domain.FailureClass) (bool, error)
+	// Settle writes the outcomes of many attempts in one transaction, each with the rules of the
+	// single-row method of its kind (Complete, Fail, Park, Switch, Defer, Unresolve): fenced by
+	// its own claim count, and moving the delivery only out of PENDING. applied[i] is false when
+	// outcomes[i]'s claim is stale, which leaves the other rows alone. A batch holds at most one
+	// outcome per delivery.
+	Settle(ctx context.Context, outcomes []domain.InboxOutcome) (applied []bool, err error)
 	// Accept ends a stuck row DONE and marks its delivery ACCEPTED, because the provider confirmed it.
 	// False means the row changed since it was listed.
 	Accept(ctx context.Context, s domain.StuckInbox) (bool, error)
