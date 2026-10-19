@@ -1,0 +1,35 @@
+time=2026-10-19T14:56:19.146+03:00 level=INFO msg=warm-up for=15s run=r1792410979
+time=2026-10-19T14:56:33.190+03:00 level=INFO msg=measuring for=2m0s recipients_per_s=75
+time=2026-10-19T14:58:32.223+03:00 level=INFO msg="waiting for the system to drain" timeout=3m0s
+# both-down
+
+Run `r1792410979`, started 2026-10-19T14:56:19+03:00. Setup is in `params.json`; queries and raw answers in `sql.txt`; every metric sample in `samples.csv`.
+
+## Load
+
+- 75 recipients/s x 3 channels = **225 deliveries/s** target, in requests of 75 recipients (1 requests/s), for 2m0s after a 15s warm-up.
+- Requests scheduled 120; answered map[202:120]; transport errors 0; **skipped by the driver 0** (in-flight limit 2000); latest request left 3ms late.
+- Deliveries the API accepted: 27000 (of 27000 requested by every scheduled request). HTTP latency of answered requests: p50 34ms, p99 89ms, max 219ms.
+
+## Request to ACCEPTED (from `accepted_at - created_at`, exact)
+
+| Deliveries | Count | p50 | p95 | p99 | max | p99 vs 5 s |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| first attempt (primary provider, no retry) | 19803 | 0.082 s | 0.161 s | 0.263 s | 0.380 s | within |
+| retried or failed over | 25 | 0.387 s | 0.387 s | 0.387 s | 0.387 s | within |
+
+## Outcome
+
+- Stored 27000 deliveries (27000 expected from accepted requests); 19828 have `accepted_at`.
+  - DELIVERED: 19828
+  - FAILED: 7055
+  - UNRESOLVED: 117
+- After the last request the system took 500ms to settle (drained).
+
+## Metrics (scraped every 1s, 0 scrapes failed)
+
+- Queue wait, sms (10125 messages including the warm-up; estimated from buckets, so shape only): p50 0.003 s, p99 0.009 s.
+- Queue wait, email (10125 messages including the warm-up; estimated from buckets, so shape only): p50 0.003 s, p99 0.008 s.
+- Queue wait, whatsapp (10125 messages including the warm-up; estimated from buckets, so shape only): p50 0.003 s, p99 0.009 s.
+- Peak queue depth: 0 (notifier_queue_depth{channel=email}).
+- Highest breaker state seen: 2 (notifier_breaker_state{provider=email-a}); 0 closed, 1 half-open, 2 open.

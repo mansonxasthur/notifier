@@ -1,0 +1,7 @@
+ secs_from_injection | state  |    failure_reason     | count 
+---------------------+--------+-----------------------+-------
+                  30 | FAILED | NO_PROVIDER_AVAILABLE |  1125
+                  35 | FAILED | NO_PROVIDER_AVAILABLE |  1125
+                  40 | FAILED | NO_PROVIDER_AVAILABLE |   297
+(3 rows)
+

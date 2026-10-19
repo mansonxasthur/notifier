@@ -1,0 +1,173 @@
+# Defaults for every entry point. Connection strings come from the environment
+# (DATABASE_URL, AMQP_URL, REDIS_URL); HTTP_ADDR overrides http.addr.
+# The api entry point also requires API_KEY, the key producers send in X-API-KEY, and the
+# webhook secret of every provider (the variable named by its webhook.secret_env). The
+# simprovider entry point requires the same secrets, because it signs with them.
+
+shutdown_timeout: 20s
+
+http:
+  addr: ":8080"
+
+# Connections one process opens to Postgres. Every instance of every service draws from the
+# database's max_connections (100 by default), so keep the sum under it.
+database:
+  max_conns: 20
+
+# Largest accepted request, in recipients.
+batch_limit: 3000
+
+# chunk_size: most delivery rows per insert statement. max_body_bytes: request body cap
+# (3,000 recipients with three channels and content fit well inside it).
+accept:
+  chunk_size: 5000
+  max_body_bytes: 4194304
+
+# Intake limit, a token bucket counted in deliveries (recipients x channels), not requests.
+# rate: deliveries per second, sized from the system-wide 500K/s peak (one machine cannot
+# prove it; the database is the bottleneck). burst: capacity, and the largest request that can
+# ever pass, so it must be at least batch_limit x 3 channels. Above it the API answers 429
+# with Retry-After. Counters live in Redis; each instance falls back to a local bucket with
+# the same numbers if Redis is unreachable.
+limits:
+  global: {rate: 500000, burst: 1000000}
+
+# Default expiry for a delivery when the request carries no expires_at.
+notification_types:
+  password_reset: {expiry: 15m}
+  match_alert: {expiry: 2h}
+  marketing: {expiry: 24h}
+
+# true: every provider call goes to the simulated provider at simulation_url.
+# false: providers are called at their own url.
+simulation: true
+simulation_url: http://simprovider:8081
+
+# The simulated provider service. mode is "random" (a scenario per request, drawn from
+# weights; seed 0 seeds from the clock) or one scenario name applied to every request:
+# succeed, fail_permanent, fail_transient, slow, timeout, late_failure.
+simprovider:
+  mode: succeed
+  # providers gives one provider a mode of its own in place of mode, for fault runs that fail a
+  # primary while its fallback stays healthy (see loadtest/configs/). Empty by default.
+  providers: {sms-a: late_failure, email-a: late_failure, whatsapp-a: late_failure}
+  seed: 0
+  weights: {succeed: 70, fail_permanent: 5, fail_transient: 10, slow: 5, timeout: 5, late_failure: 5}
+  # Keep slow_delay under the providers' timeout and timeout_delay over it.
+  slow_delay: 500ms
+  timeout_delay: 3s
+  # Wait before a delivery or late-failure webhook is sent to the API.
+  webhook_delay: 300ms
+  webhook_url: http://api:8080
+
+# Providers are tried in list order. Exactly one per channel is primary; the rest are fallbacks.
+# webhook: how the provider authenticates its webhooks to POST /v1/webhooks/<name>. auth is
+# hmac_signature (header = hex HMAC-SHA256 of the body) or shared_secret_header (header = the
+# secret). secret_env names the environment variable holding the secret.
+# rate_limit: a token bucket per sender in front of every call to the provider (calls per
+# second, burst = capacity); when it is empty the delivery waits and no retry is spent.
+channels:
+  email:
+    providers:
+      - name: email-a
+        primary: true
+        url: https://email-a.example.com
+        timeout: 1s
+        status_lookup: true
+        max_retries: 1
+        backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        rate_limit: {rate: 200000, burst: 20000}
+        webhook: {auth: hmac_signature, header: X-Signature, secret_env: WEBHOOK_SECRET_EMAIL_A}
+      - name: email-b
+        primary: false
+        url: https://email-b.example.com
+        timeout: 1s
+        status_lookup: false
+        max_retries: 1
+        backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        rate_limit: {rate: 200000, burst: 20000}
+        webhook: {auth: shared_secret_header, header: X-Webhook-Token, secret_env: WEBHOOK_SECRET_EMAIL_B}
+  sms:
+    providers:
+      - name: sms-a
+        primary: true
+        url: https://sms-a.example.com
+        timeout: 1s
+        status_lookup: true
+        max_retries: 1
+        backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        rate_limit: {rate: 200000, burst: 20000}
+        webhook: {auth: hmac_signature, header: X-Signature, secret_env: WEBHOOK_SECRET_SMS_A}
+      - name: sms-b
+        primary: false
+        url: https://sms-b.example.com
+        timeout: 1s
+        status_lookup: false
+        max_retries: 1
+        backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        rate_limit: {rate: 200000, burst: 20000}
+        webhook: {auth: shared_secret_header, header: X-Webhook-Token, secret_env: WEBHOOK_SECRET_SMS_B}
+  whatsapp:
+    providers:
+      - name: whatsapp-a
+        primary: true
+        url: https://whatsapp-a.example.com
+        timeout: 1s
+        status_lookup: true
+        max_retries: 1
+        backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        rate_limit: {rate: 200000, burst: 20000}
+        webhook: {auth: hmac_signature, header: X-Signature, secret_env: WEBHOOK_SECRET_WHATSAPP_A}
+      - name: whatsapp-b
+        primary: false
+        url: https://whatsapp-b.example.com
+        timeout: 1s
+        status_lookup: false
+        max_retries: 1
+        backoff: {initial: 200ms, max: 5s, multiplier: 2.0, jitter: 0.2}
+        rate_limit: {rate: 200000, burst: 20000}
+        webhook: {auth: shared_secret_header, header: X-Webhook-Token, secret_env: WEBHOOK_SECRET_WHATSAPP_B}
+
+relay:
+  poll_interval: 100ms
+  batch_size: 2000
+  # Delivery ids in one queue message, so the broker carries about 1/message_size of the
+  # deliveries per second as messages. 1 publishes the single-id shape older senders read: deploy
+  # senders before raising it, and lower it again before rolling senders back.
+  message_size: 100
+  # Claim-and-publish loops per relay process; SKIP LOCKED keeps them off each other's rows.
+  workers: 8
+  max_attempts: 10
+  # How long to wait for the broker to confirm a published batch.
+  confirm_timeout: 5s
+  backoff: {initial: 1s, max: 1m, multiplier: 2.0, jitter: 0.2}
+  janitor:
+    interval: 5s
+    outbox_stuck_after: 30s
+    # Added to a provider's timeout to get the stuck threshold for its inbox rows.
+    inbox_stuck_margin: 2s
+
+sender:
+  # How often the sender scans for retries that have become due.
+  poll_interval: 200ms
+  max_claims: 20
+  # Unacknowledged messages a sender holds per queue. A message carries up to relay.message_size
+  # ids and all of them are handled at once, so ids in flight per queue is about prefetch times
+  # message_size. Keep that a few times batch_size so database batches fill.
+  prefetch: 4
+  # The sender groups the claims, loads and outcome writes of messages in flight together into
+  # one database call (one commit) of up to batch_size, written linger after the first at the
+  # latest. linger is the latency each database stage adds when the sender is not busy.
+  batch_size: 50
+  linger: 5ms
+  # Due retries claimed per scan, for each channel: every channel has its own scan, so this is
+  # also how many sends one channel can have in flight from it.
+  scan_batch: 500
+  # Times a row may be put back for a provider's rate limit without costing a claim. Past it,
+  # each deferral counts against max_claims, so a limit far below the load cannot defer a row forever.
+  max_deferrals: 1000
+  # One local breaker per provider: it opens after this many consecutive failures and lets
+  # one probe through once open_for has passed.
+  breaker:
+    failure_threshold: 5
+    open_for: 10s

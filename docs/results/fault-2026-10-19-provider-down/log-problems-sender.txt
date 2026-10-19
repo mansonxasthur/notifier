@@ -1,0 +1,20 @@
+   2397 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"email-a","claim":1,"failure_class":"provider","outcome":"switched","why":"breaker_open","next_provider":"email-b"}
+   2371 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-a","claim":1,"failure_class":"provider","outcome":"switched","why":"breaker_open","next_provider":"whatsapp-b"}
+   2323 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"sms-a","claim":1,"failure_class":"provider","outcome":"switched","why":"breaker_open","next_provider":"sms-b"}
+    149 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"email-b","claim":2,"failure_class":"provider","outcome":"failed","reason":"NO_PROVIDER_AVAILABLE"}
+    148 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-b","claim":2,"failure_class":"provider","outcome":"failed","reason":"NO_PROVIDER_AVAILABLE"}
+     77 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-a","claim":2,"failure_class":"provider","outcome":"switched","why":"breaker_open","next_provider":"whatsapp-b"}
+     77 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"sms-a","claim":2,"failure_class":"provider","outcome":"switched","why":"breaker_open","next_provider":"sms-b"}
+     52 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"email-a","claim":2,"failure_class":"provider","outcome":"switched","why":"breaker_open","next_provider":"email-b"}
+     50 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-b","claim":3,"failure_class":"provider","outcome":"failed","reason":"NO_PROVIDER_AVAILABLE"}
+     50 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-b","claim":2,"failure_class":"provider","outcome":"parked","error":"provider failure: Post \"http://simprovider:8081/providers/whatsapp-b/send\": dial tcp 192.168.208.5:8081: connect: connection refused","next_a
+     50 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"email-b","claim":3,"failure_class":"provider","outcome":"failed","reason":"NO_PROVIDER_AVAILABLE"}
+     50 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"email-b","claim":2,"failure_class":"provider","outcome":"parked","error":"provider failure: Post \"http://simprovider:8081/providers/email-b/send\": dial tcp 192.168.208.5:8081: connect: connection refused","next_attempt
+      3 sender-1  | {"level":"WARN","msg":"circuit breaker opened","service":"sender","provider":"whatsapp-a"}
+      3 sender-1  | {"level":"WARN","msg":"circuit breaker opened","service":"sender","provider":"sms-a"}
+      3 sender-1  | {"level":"WARN","msg":"circuit breaker opened","service":"sender","provider":"email-a"}
+      1 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-a","claim":1,"failure_class":"provider","outcome":"parked","error":"provider failure: status 503","next_attempt_at":"2026-10-19T11:54:57.59342095Z"}
+      1 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-a","claim":1,"failure_class":"provider","outcome":"parked","error":"provider failure: status 503","next_attempt_at":"2026-10-19T11:54:47.652157803Z"}
+      1 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-a","claim":1,"failure_class":"provider","outcome":"parked","error":"provider failure: status 503","next_attempt_at":"2026-10-19T11:54:36.652068168Z"}
+      1 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-a","claim":1,"failure_class":"provider","outcome":"parked","error":"provider failure: status 503","next_attempt_at":"2026-10-19T11:54:36.644523776Z"}
+      1 sender-1  | {"level":"WARN","msg":"send attempt","service":"sender","provider":"whatsapp-a","claim":1,"failure_class":"provider","outcome":"parked","error":"provider failure: status 503","next_attempt_at":"2026-10-19T11:54:36.643937291Z"}

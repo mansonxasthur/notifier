@@ -45,3 +45,9 @@ ifndef  name
 	$(error usage: make migrate-create name=<migration_name>)
 endif
 	migrate create -ext sql -dir migrations -format 20060102150405 $(name)
+
+# One fault-injection run on the load-test stack (resets it): make fault name=provider-down.
+# make fault name=list shows the runs. Results go to docs/results/fault-<date>-<name>/.
+.PHONY: fault
+fault:
+	loadtest/faults.sh $(name)

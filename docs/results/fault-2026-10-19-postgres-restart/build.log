@@ -1,0 +1,178 @@
+#0 building with "default" instance using docker driver
+
+#1 [sender internal] load build definition from Dockerfile
+#1 transferring dockerfile: 575B done
+#1 DONE 0.0s
+
+#2 [api internal] load build definition from Dockerfile
+#2 transferring dockerfile: 575B done
+#2 DONE 0.0s
+
+#3 [relay internal] load build definition from Dockerfile
+#3 transferring dockerfile: 575B done
+#3 DONE 0.0s
+
+#4 [simprovider internal] load build definition from Dockerfile
+#4 transferring dockerfile: 575B done
+#4 DONE 0.0s
+
+#5 [relay internal] load metadata for docker.io/library/golang:1.26-alpine
+#5 DONE 0.6s
+
+#6 [sender internal] load metadata for gcr.io/distroless/static-debian12:nonroot
+#6 DONE 0.5s
+
+#7 [api internal] load .dockerignore
+#7 transferring context: 97B done
+#7 DONE 0.0s
+
+#8 [simprovider internal] load .dockerignore
+#8 transferring context: 97B done
+#8 DONE 0.0s
+
+#9 [relay internal] load .dockerignore
+#9 transferring context: 97B done
+#9 DONE 0.0s
+
+#10 [sender internal] load .dockerignore
+#10 transferring context: 97B done
+#10 DONE 0.0s
+
+#11 [sender build 1/7] FROM docker.io/library/golang:1.26-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade
+#11 DONE 0.0s
+
+#12 [sender stage-1 1/3] FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+#12 DONE 0.0s
+
+#13 [api internal] load build context
+#13 transferring context: 8.70kB 0.0s done
+#13 DONE 0.0s
+
+#11 [relay build 1/7] FROM docker.io/library/golang:1.26-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade
+#11 DONE 0.0s
+
+#12 [relay stage-1 1/3] FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+#12 DONE 0.0s
+
+#14 [relay internal] load build context
+#14 transferring context: 8.70kB 0.0s done
+#14 DONE 0.0s
+
+#15 [sender internal] load build context
+#15 transferring context: 8.70kB 0.0s done
+#15 DONE 0.0s
+
+#16 [relay build 7/7] RUN test -n "relay" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/relay
+#16 CACHED
+
+#17 [relay build 3/7] COPY go.mod go.sum ./
+#17 CACHED
+
+#18 [relay stage-1 2/3] COPY --from=build /out/app /app
+#18 CACHED
+
+#19 [relay build 6/7] COPY internal ./internal
+#19 CACHED
+
+#20 [relay build 5/7] COPY cmd ./cmd
+#20 CACHED
+
+#21 [relay build 4/7] RUN go mod download
+#21 CACHED
+
+#22 [relay stage-1 3/3] COPY config/config.yaml /etc/notifier/config.yaml
+#22 CACHED
+
+#23 [simprovider internal] load build context
+#23 transferring context: 8.70kB 0.0s done
+#23 DONE 0.1s
+
+#24 [api stage-1 2/3] COPY --from=build /out/app /app
+#24 CACHED
+
+#25 [api build 4/7] RUN go mod download
+#25 CACHED
+
+#26 [api build 7/7] RUN test -n "api" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/api
+#26 CACHED
+
+#27 [api build 6/7] COPY internal ./internal
+#27 CACHED
+
+#28 [api build 3/7] COPY go.mod go.sum ./
+#28 CACHED
+
+#29 [api build 5/7] COPY cmd ./cmd
+#29 CACHED
+
+#30 [api stage-1 3/3] COPY config/config.yaml /etc/notifier/config.yaml
+#30 CACHED
+
+#31 [simprovider build 6/7] COPY internal ./internal
+#31 CACHED
+
+#32 [simprovider stage-1 2/3] COPY --from=build /out/app /app
+#32 CACHED
+
+#33 [simprovider build 5/7] COPY cmd ./cmd
+#33 CACHED
+
+#34 [simprovider build 3/7] COPY go.mod go.sum ./
+#34 CACHED
+
+#35 [simprovider build 7/7] RUN test -n "simprovider" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/simprovider
+#35 CACHED
+
+#36 [simprovider build 4/7] RUN go mod download
+#36 CACHED
+
+#37 [simprovider stage-1 3/3] COPY config/config.yaml /etc/notifier/config.yaml
+#37 CACHED
+
+#38 [sender build 7/7] RUN test -n "sender" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/sender
+#38 CACHED
+
+#39 [sender build 3/7] COPY go.mod go.sum ./
+#39 CACHED
+
+#40 [sender stage-1 2/3] COPY --from=build /out/app /app
+#40 CACHED
+
+#41 [sender build 5/7] COPY cmd ./cmd
+#41 CACHED
+
+#42 [relay build 2/7] WORKDIR /src
+#42 CACHED
+
+#43 [sender build 6/7] COPY internal ./internal
+#43 CACHED
+
+#44 [sender build 4/7] RUN go mod download
+#44 CACHED
+
+#45 [sender stage-1 3/3] COPY config/config.yaml /etc/notifier/config.yaml
+#45 CACHED
+
+#46 [api] exporting to image
+#46 exporting layers done
+#46 writing image sha256:fb459c80934d7677dbf4a0261c7f3158d5bc17dd19358345db315c94afc5fd1c done
+#46 naming to docker.io/library/notifier-api done
+#46 DONE 0.0s
+
+#47 [relay] exporting to image
+#47 exporting layers done
+#47 writing image sha256:12a26779e3c8bddda026f847c6c9f5dfae7a2614b211aea55689d68cde5a32f7 0.0s done
+#47 naming to docker.io/library/notifier-relay done
+#47 DONE 0.0s
+
+#48 [sender] exporting to image
+#48 exporting layers done
+#48 writing image sha256:42fe6ac098b7e5bdaac360791cb5448cd4ead443f6423559cc24765bd726d726 done
+#48 naming to docker.io/library/notifier-sender done
+#48 DONE 0.0s
+
+#49 [simprovider] exporting to image
+#49 exporting layers done
+#49 writing image sha256:6440222590e291fe83bee9de9485f6221e2f81d6b27ddc904e61e84363ad43fd done
+#49 naming to docker.io/library/notifier-simprovider 0.0s done
+#49 DONE 0.0s

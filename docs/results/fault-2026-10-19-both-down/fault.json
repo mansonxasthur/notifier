@@ -1,0 +1,1 @@
+{"inject":"simprovider.providers={sms-a: fail_transient, sms-b: fail_transient, email-a: fail_transient, email-b: fail_transient, whatsapp-a: fail_transient, whatsapp-b: fail_transient}","inject_unix_ms":1792412436931,"inject_done_unix_ms":1792412437581,"release":"","release_unix_ms":1792412467588,"release_done_unix_ms":1792412468117}

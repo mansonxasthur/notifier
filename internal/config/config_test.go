@@ -230,6 +230,8 @@ func TestValidateRejects(t *testing.T) {
 			cc.Providers[0].Webhook.SecretEnv = ""
 			setEmail(c, cc)
 		}, "webhook.secret_env"},
+		{"simprovider provider mode unknown", func(c *Config) { c.SimProvider.Providers = map[string]string{"sms-a": "chaos"} }, "simprovider.providers.sms-a"},
+		{"simprovider provider not configured", func(c *Config) { c.SimProvider.Providers = map[string]string{"nope": "succeed"} }, "simprovider.providers.nope"},
 		{"simprovider unknown mode", func(c *Config) { c.SimProvider.Mode = "chaos" }, "simprovider.mode"},
 		{"simprovider unknown weight", func(c *Config) { c.SimProvider.Weights["chaos"] = 1 }, "not a known scenario"},
 		{"simprovider negative weight", func(c *Config) { c.SimProvider.Weights[domain.ScenarioSlow] = -1 }, "must not be negative"},

@@ -10,7 +10,11 @@
 #   GLOBAL_BURST [1000000]   limits.global.burst
 #   DB_MAX_CONNS [20]        database.max_conns of every service
 #   SUT_CPUS [0-2], SIM_CPUS [3]  cores for the system under test, and for the simulator and driver
+#   SIM_PROVIDERS [none]     simprovider.providers flow map, a mode for named providers (fault runs)
+#   FAULT_AT, FAULT_CMD, RELEASE_CMD, RELEASE_AFTER, SIM_FAULT_PROVIDERS [none]
+#                            a fault run; see the comment above the injector. loadtest/faults.sh sets them.
 #   PG_SYNC_COMMIT [on]      off only to diagnose; see docker-compose.loadtest.yml
+#   OUT_PREFIX [load]        the results directory is docs/results/<prefix>-<date>-<name>
 #   KEEP_STACK [0]           1 leaves the stack up afterwards
 # The config is the shipped one with those lines changed; the result is saved as config.yaml
 # in the results directory, so the run can be repeated exactly.
@@ -22,7 +26,7 @@ shift 2
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
-out="$root/docs/results/load-$(date +%F)-$name"
+out="$root/docs/results/${OUT_PREFIX:-load}-$(date +%F)-$name"
 mkdir -p "$out"
 
 sim_mode=${SIM_MODE:-succeed}
@@ -37,13 +41,19 @@ sed -e "s/^  mode: random$/  mode: ${sim_mode}/" \
 grep -q "^  mode: ${sim_mode}$" "$out/config.yaml" || { echo "simprovider.mode was not set to ${sim_mode}: is config/config.yaml formatted as run.sh expects?" >&2; exit 1; }
 grep -q "global: {rate: ${grate}, burst: ${gburst}}" "$out/config.yaml" || { echo "limits.global was not set: is config/config.yaml formatted as run.sh expects?" >&2; exit 1; }
 grep -q "^  max_conns: ${DB_MAX_CONNS:-20}$" "$out/config.yaml" || { echo "database.max_conns was not set: is config/config.yaml formatted as run.sh expects?" >&2; exit 1; }
+if [ -n "${SIM_PROVIDERS:-}" ]; then
+  sed -i -e "s/^  providers: {}$/  providers: ${SIM_PROVIDERS}/" "$out/config.yaml"
+  grep -q "^  providers: ${SIM_PROVIDERS}$" "$out/config.yaml" || { echo "simprovider.providers was not set" >&2; exit 1; }
+fi
 if [ -n "${SIM_WEIGHTS:-}" ]; then
   sed -i -e "s/^  weights: {.*}$/  weights: ${SIM_WEIGHTS}/" "$out/config.yaml"
 fi
 diff <(cat config/config.yaml) "$out/config.yaml" > "$out/config.diff" || true
 
 compose=(docker compose -f docker-compose.yml -f docker-compose.loadtest.yml)
-export LOAD_CONFIG="$out/config.yaml"
+# The stack mounts a copy, so a fault run can rewrite it without changing the config saved as the record.
+cp "$out/config.yaml" "$out/config.live.yaml"
+export LOAD_CONFIG="$out/config.live.yaml"
 export PG_SYNC_COMMIT=${PG_SYNC_COMMIT:-on}
 
 log() { echo "[$(date +%T)] >> $*"; }
@@ -100,10 +110,59 @@ log "sampling container CPU and memory"
   done
 ) > "$out/docker-stats.csv" 2>/dev/null &
 sampler=$!
-trap 'kill $sampler 2>/dev/null || true; pkill -P $sampler 2>/dev/null || true' EXIT
+injector=""
+trap 'kill $sampler $injector 2>/dev/null || true; pkill -P $sampler 2>/dev/null || true; [ -z "$injector" ] || pkill -P $injector 2>/dev/null || true' EXIT
 
 log "building the driver"
 go build -o "$out/.loadtest" ./cmd/loadtest || fail "driver build failed"
+# A fault run injects one fault FAULT_AT seconds after the driver starts and, with RELEASE_AFTER,
+# lifts it that many seconds later. The fault is a docker compose command (FAULT_CMD, RELEASE_CMD)
+# or, for provider scenarios, SIM_FAULT_PROVIDERS: the simulator is given a config whose
+# simprovider.providers is that map and restarted (its ledger is saved first, because a restart
+# empties it), and released by restoring the config. Times go to fault.json.
+if [ -n "${FAULT_CMD:-}${SIM_FAULT_PROVIDERS:-}" ]; then
+  cp "$out/config.yaml" "$out/config.base.yaml"
+  snapshot() { curl -sf --max-time 20 localhost:8081/scenarios > "$out/scenarios-$1.json" 2>/dev/null || true; }
+  inject() {
+    if [ -n "${SIM_FAULT_PROVIDERS:-}" ]; then
+      snapshot before-inject
+      sed -e "s/^  providers: {}$/  providers: ${SIM_FAULT_PROVIDERS}/" "$out/config.base.yaml" > "$out/config.fault.yaml"
+      # Written in place: the compose files bind-mount this file, so it must keep its inode.
+      cat "$out/config.fault.yaml" > "$LOAD_CONFIG"
+      "${compose[@]}" restart simprovider
+    else
+      "${compose[@]}" $FAULT_CMD
+    fi
+  }
+  release() {
+    if [ -n "${SIM_FAULT_PROVIDERS:-}" ]; then
+      snapshot before-release
+      cat "$out/config.base.yaml" > "$LOAD_CONFIG"
+      "${compose[@]}" restart simprovider
+    else
+      "${compose[@]}" $RELEASE_CMD
+    fi
+  }
+  (
+    set +e # a failing inject or release must still leave fault.json behind
+    now_ms() { date +%s%3N; }
+    sleep "${FAULT_AT:?a fault run needs FAULT_AT}"
+    inject_ms=$(now_ms)
+    inject > "$out/fault-inject.log" 2>&1
+    inject_done_ms=$(now_ms)
+    release_ms=null; release_done_ms=null
+    if [ -n "${RELEASE_CMD:-}${RELEASE_AFTER:-}" ]; then
+      sleep "${RELEASE_AFTER:-30}"
+      release_ms=$(now_ms)
+      release > "$out/fault-release.log" 2>&1
+      release_done_ms=$(now_ms)
+    fi
+    printf '{"inject":"%s","inject_unix_ms":%s,"inject_done_unix_ms":%s,"release":"%s","release_unix_ms":%s,"release_done_unix_ms":%s}\n' \
+      "${FAULT_CMD:-simprovider.providers=${SIM_FAULT_PROVIDERS:-}}" "$inject_ms" "$inject_done_ms" \
+      "${RELEASE_CMD:-}" "$release_ms" "$release_done_ms" > "$out/fault.json"
+  ) &
+  injector=$!
+fi
 log "driving ${rate} recipients/s; the driver prints its phases, and the summary follows when it ends"
 DATABASE_URL='postgres://notifier:notifier@localhost:5432/notifier?sslmode=disable' \
   taskset -c "${SIM_CPUS:-3}" "$out/.loadtest" -rate "$rate" -out "$out" -label "$name" \
@@ -114,6 +173,10 @@ rm -f "$out/.loadtest"
 [ "$driver_status" -eq 0 ] || fail "the driver exited with status $driver_status (see driver.log)"
 
 kill $sampler 2>/dev/null || true
+# The injector may still be inside its release; fault.json is written when it is done.
+[ -z "$injector" ] || wait "$injector" || true
+# What the simulator received, for counting duplicate sends before the stack goes.
+curl -sf --max-time 20 localhost:8081/scenarios > "$out/scenarios.json" 2>/dev/null || true
 # What the database was doing: checkpoints, and dead tuples and vacuums per table.
 timeout 20 "${compose[@]}" exec -T postgres psql -U notifier -P pager=off -c \
   "SELECT * FROM pg_stat_checkpointer" -c \

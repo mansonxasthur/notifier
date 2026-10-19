@@ -1,0 +1,2 @@
+sender-1  | {"time":"2026-10-19T12:23:37.480799994Z","level":"ERROR+4","msg":"no provider available: every circuit breaker is open","service":"sender","provider":"email-b"}
+sender-1  | {"time":"2026-10-19T12:23:47.526398562Z","level":"ERROR+4","msg":"no provider available: every circuit breaker is open","service":"sender","provider":"whatsapp-b"}

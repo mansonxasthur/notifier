@@ -392,6 +392,13 @@ A queue message carries a batch of delivery ids for one channel, so 500K deliver
 - **Rollout.** Deploy senders first, then relays: an old sender drops a multi-id body as malformed. Roll back relays first. `relay.message_size: 1` publishes the old shape.
 - **Cost.** Redelivery is coarser (a whole message), and the ids of a message wait for the slowest in it before the ack.
 
+## Fault-injection runs (Phase 7 Part D)
+
+Each run holds 50% of the headline rate (75 recipients/s, 225 deliveries/s) for 15 s of warm-up and 120 s measured, injects one fault 30 s into the measured phase, releases it where the run says so, and then lets the system drain. Every run records client errors, first-attempt and retried p99, final states, lost deliveries (must be zero), duplicate sends counted at the simulator, recovery time and the breaker and queue traces. A run is judged against the behaviour this log promises; a run that contradicts it is reported as a finding.
+
+- **Per-provider scenarios.** To fail the primary of each channel while its fallback stays healthy, `simprovider.providers` maps a provider name to its own mode (a scenario name or `random`); a provider not listed uses `simprovider.mode`. This is configuration read at start, so the simulator gains no runtime control. Each fault run has its own config overlay in `loadtest/configs/`.
+- **Process and infrastructure faults** use `docker compose` (`stop`, `kill`, `restart`) on the load-test stack, at a fixed time after the measured phase starts. The injection and release times are written to `fault.json` beside the results.
+
 ## Out of scope and future work
 
 Nothing remains open. These seven items were considered and left out of this assignment on purpose. Each is a candidate for a later version.

@@ -21,3 +21,11 @@ This is a summary of the session, not a transcript. See also [queue batching](20
 
 - Why the breakers open above 450 deliveries/s; 10 deliveries DELIVERED without `accepted_at` in `after-hold-150-msg1-prefetch200`.
 - Part D (#27): needs approval of the plan before building.
+
+## Part D (#27)
+
+Built `loadtest/faults.sh` (`make fault name=<run>`), per-provider simulator modes (`simprovider.providers`, config only), `cmd/faultreport` and `internal/loadtest/fault.go` (recovery time, duplicate sends), and ran eleven fault runs (twelve directories; `both-down-run1` is the first of two). Results and the verdict per run are in `docs/results/README.md`, "Fault injection". Nothing lost or duplicated in any run.
+
+Mistakes and corrections: the first launch used `-batch 100` with 75 recipients/s and the driver refused it; the first report counted a half-open fallback breaker as not recovered (it stays half-open without traffic); the first `both-down` run could not show the critical log line because `log-problems` keeps only the top 20 lines, so `critical-lines.txt` was added and the run repeated.
+
+Open: the provider runs inject by restarting the simulator, whose 0.6 s blip opens the fallback breakers too, so their FAILED counts overstate the fault; a runtime switch in the simulator would fix that. `UNRESOLVED` is not cleanly exercised. Each run once.

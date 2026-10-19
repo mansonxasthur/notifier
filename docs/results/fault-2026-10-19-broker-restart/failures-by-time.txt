@@ -1,0 +1,4 @@
+ secs_from_injection | state | failure_reason | count 
+---------------------+-------+----------------+-------
+(0 rows)
+

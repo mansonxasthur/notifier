@@ -1,0 +1,53 @@
+{
+  "args": [
+    "-rate",
+    "75",
+    "-out",
+    "/home/manson/Projects/notifier/docs/results/fault-2026-10-19-both-timeout",
+    "-label",
+    "both-timeout",
+    "-target",
+    "api=http://localhost:8080/metrics",
+    "-target",
+    "relay=http://localhost:8082/metrics",
+    "-target",
+    "sender=http://localhost:8083/metrics",
+    "-batch",
+    "75",
+    "-warmup",
+    "15s",
+    "-duration",
+    "120s",
+    "-drain-timeout",
+    "180s"
+  ],
+  "batch": 75,
+  "channels": [
+    "sms",
+    "email",
+    "whatsapp"
+  ],
+  "deliveries_per_second": 225,
+  "driver_cpu_affinity": 2,
+  "duration": "2m0s",
+  "git_dirty": true,
+  "git_sha": "0064b92d5687ae55176e9eea2fde8fef86811654",
+  "go": "go1.26.3",
+  "hardware": {
+    "cpu": "Intel(R) Core(TM) i5-4570 CPU @ 3.20GHz",
+    "cpu_threads": "4",
+    "kernel": "Linux version 7.0.0-38-generic (buildd@lcy02-amd64-070) (x86_64-linux-gnu-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0, GNU ld (",
+    "memory": "15733948 kB"
+  },
+  "label": "both-timeout",
+  "max_in_flight": 2000,
+  "primaries": [
+    "sms-a",
+    "email-a",
+    "whatsapp-a"
+  ],
+  "recipients_per_second": 75,
+  "run_id": "r1792412541",
+  "started": "2026-10-19T15:22:21+03:00",
+  "warmup": "15s"
+}
