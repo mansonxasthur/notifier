@@ -30,11 +30,18 @@ type Consumer struct {
 	conn     *Conn
 	prefetch int
 	log      *slog.Logger
+	rec      ports.Recorder
 }
 
 // NewConsumer holds at most prefetch unacknowledged messages per queue.
 func NewConsumer(conn *Conn, prefetch int, log *slog.Logger) *Consumer {
-	return &Consumer{conn: conn, prefetch: prefetch, log: log}
+	return &Consumer{conn: conn, prefetch: prefetch, log: log, rec: ports.NopRecorder{}}
+}
+
+// WithRecorder makes the consumer report how long each message waited in its queue.
+func (c *Consumer) WithRecorder(r ports.Recorder) *Consumer {
+	c.rec = r
+	return c
 }
 
 // Consume implements ports.Consumer.
@@ -99,6 +106,7 @@ func (c *Consumer) handle(ctx context.Context, ch domain.Channel, h ports.Handle
 		_ = msg.Reject(false)
 		return
 	}
+	c.recordWait(ch, msg)
 	// In-flight messages finish when the consumer stops, so the handler is not cancelled with it.
 	hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handlerTimeout)
 	defer cancel()
@@ -112,4 +120,17 @@ func (c *Consumer) handle(ctx context.Context, ch domain.Channel, h ports.Handle
 		return
 	}
 	_ = msg.Ack(false)
+}
+
+// recordWait reports the time since the publisher sent msg. A redelivered message is skipped:
+// its wait includes the failure that sent it back, which is not queueing.
+func (c *Consumer) recordWait(ch domain.Channel, msg amqp.Delivery) {
+	if msg.Redelivered {
+		return
+	}
+	ns, ok := msg.Headers[EnqueuedHeader].(int64)
+	if !ok {
+		return
+	}
+	c.rec.QueueWait(ch, time.Since(time.Unix(0, ns)))
 }

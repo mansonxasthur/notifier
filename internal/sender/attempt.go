@@ -42,6 +42,7 @@ type Attempt struct {
 	limits     *ProviderLimits
 	routing    Routing
 	log        *slog.Logger
+	rec        ports.Recorder
 
 	now    func() time.Time
 	jitter func() float64
@@ -55,9 +56,16 @@ func NewAttempt(deliveries ports.DeliveryStore, inbox ports.InboxStore, provider
 	return &Attempt{
 		deliveries: deliveries, inbox: inbox, providers: providers, checker: checker,
 		breakers: breakers, limits: limits, routing: routing, log: log,
+		rec:    ports.NopRecorder{},
 		now:    time.Now,
 		jitter: rand.Float64, //nolint:gosec // jitter spreads retries, it is not a secret
 	}
+}
+
+// WithRecorder makes the attempt report the latency of every delivery it accepts.
+func (a *Attempt) WithRecorder(r ports.Recorder) *Attempt {
+	a.rec = r
+	return a
 }
 
 // settleTimeout bounds the inbox write that records an attempt's outcome.
@@ -72,6 +80,11 @@ type attemptRun struct {
 	next string
 	// ticket is the breaker's pass for this call; the result is reported with it.
 	ticket Ticket
+	// channel and created are the delivery's, for the accept latency.
+	channel domain.Channel
+	created time.Time
+	// first is true on the channel's primary provider with no retry spent.
+	first bool
 }
 
 // Send implements Send. An attempt that gets an answer ends in one log line with the
@@ -99,6 +112,8 @@ func (a *Attempt) Send(ctx context.Context, c Claimed) error {
 	if err != nil {
 		return err
 	}
+	run.channel, run.created = d.Channel, d.CreatedAt
+	run.first = c.Retries == 0 && run.isPrimary(a.routing.Order[d.Channel])
 
 	settleCtx, cancel := settleContext(ctx)
 	defer cancel()
@@ -124,6 +139,11 @@ func (a *Attempt) Send(ctx context.Context, c Claimed) error {
 
 	err = run.provider.Send(ctx, ports.SendRequest{DeliveryID: d.ID, Channel: d.Channel, Contact: d.Contact, Content: d.Content})
 	return a.settle(ctx, run, err)
+}
+
+// isPrimary reports whether the claim's provider is the first of the channel's order.
+func (r attemptRun) isPrimary(order []string) bool {
+	return len(order) > 0 && order[0] == r.c.Provider
 }
 
 // plan resolves the claim's provider, its retry policy and the provider after it.
@@ -176,7 +196,7 @@ func (a *Attempt) settle(ctx context.Context, run attemptRun, sendErr error) err
 		if a.breakers.Success(provider, run.ticket) == Closed {
 			a.outage.Store(false)
 		}
-		return a.complete(settleCtx, run.c, "")
+		return a.complete(settleCtx, run, "")
 	}
 
 	class, classified := ports.ClassOf(sendErr)
@@ -214,7 +234,7 @@ func (a *Attempt) settleTimeout(checkCtx, settleCtx context.Context, run attempt
 	if err == nil && res == ports.CheckAccepted {
 		// Slow, but the provider took the message: neither a success nor a failure.
 		a.breakers.Release(run.c.Provider, run.ticket)
-		return a.complete(settleCtx, run.c, domain.FailureTimeout, "lookup", "accepted")
+		return a.complete(settleCtx, run, domain.FailureTimeout, "lookup", "accepted")
 	}
 	a.breakerFailure(run)
 	if err == nil && res == ports.CheckNotFound {
@@ -293,10 +313,14 @@ func (a *Attempt) switchTo(ctx context.Context, run attemptRun, class domain.Fai
 	return nil
 }
 
-func (a *Attempt) complete(ctx context.Context, c Claimed, class domain.FailureClass, extra ...any) error {
+func (a *Attempt) complete(ctx context.Context, run attemptRun, class domain.FailureClass, extra ...any) error {
+	c := run.c
 	applied, err := a.inbox.Complete(ctx, c.DeliveryID, c.ClaimCount)
 	if err != nil {
 		return err
+	}
+	if applied && !run.created.IsZero() {
+		a.rec.AcceptLatency(run.channel, run.first, a.now().Sub(run.created))
 	}
 	a.logAttempt(c, class, outcomeAccepted, applied, extra...)
 	return nil

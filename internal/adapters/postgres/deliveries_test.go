@@ -29,6 +29,9 @@ func TestDeliveryLoad(t *testing.T) {
 	if !d.ExpiresAt.Equal(expiry) {
 		t.Errorf("expires_at = %v, want %v", d.ExpiresAt, expiry)
 	}
+	if age := time.Since(d.CreatedAt); age < 0 || age > time.Minute {
+		t.Errorf("created_at = %v, want the moment the delivery was stored", d.CreatedAt)
+	}
 
 	if _, err := store.Load(ctx, id+1000); !errors.Is(err, ports.ErrDeliveryNotFound) {
 		t.Errorf("unknown delivery: err = %v, want ErrDeliveryNotFound", err)
@@ -78,6 +81,9 @@ func TestInboxComplete(t *testing.T) {
 		if got := state(t, db, deliveryState, id); got != "ACCEPTED" {
 			t.Errorf("delivery = %s, want ACCEPTED", got)
 		}
+		if got := count(t, db.Pool(), `SELECT count(*) FROM deliveries WHERE id = $1 AND accepted_at >= created_at`, id); got != 1 {
+			t.Errorf("accepted_at was not set at or after created_at")
+		}
 	})
 
 	t.Run("a stale claim changes nothing", func(t *testing.T) {
@@ -91,6 +97,9 @@ func TestInboxComplete(t *testing.T) {
 		}
 		if got := state(t, db, deliveryState, id); got != "PENDING" {
 			t.Errorf("delivery = %s, want PENDING", got)
+		}
+		if got := count(t, db.Pool(), `SELECT count(*) FROM deliveries WHERE accepted_at IS NOT NULL`); got != 0 {
+			t.Errorf("accepted_at set on a delivery that was not accepted")
 		}
 	})
 

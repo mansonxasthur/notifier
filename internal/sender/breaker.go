@@ -178,3 +178,24 @@ func (b *Breakers) get(provider string) *breaker {
 	}
 	return br
 }
+
+// States returns each known provider's state as the metrics export it: 0 closed, 1 half-open,
+// 2 open. An open breaker whose open period has passed counts as half-open, since the next
+// call is admitted as a probe, though no call has yet moved it.
+func (b *Breakers) States() map[string]int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.now()
+	out := make(map[string]int, len(b.by))
+	for name, br := range b.by {
+		switch {
+		case br.state == stateHalfOpen, br.state == stateOpen && !now.Before(br.openedAt.Add(b.policy.OpenFor)):
+			out[name] = 1
+		case br.state == stateOpen:
+			out[name] = 2
+		default:
+			out[name] = 0
+		}
+	}
+	return out
+}

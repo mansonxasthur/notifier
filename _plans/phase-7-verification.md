@@ -116,3 +116,12 @@ A `make fault name=<run>` target drives each one through `cmd/loadtest` plus a s
 5. "First attempt" means `retries = 0` on the primary provider; anything else is "retried".
 6. Four PRs (A-D) rather than one large phase PR.
 7. Single-machine results are reported as such; the 500K/s figure is argued by the scale-up path, not claimed.
+
+## Deviations made while building Part B
+
+- **Enqueue time is a custom header (`enqueued_at_ns`, Unix nanoseconds), not the AMQP `timestamp` property**, which has one-second resolution. Redelivered messages are not measured.
+- **`ports.Recorder` has three methods** (queue wait, accept latency, queue depth). Breaker state is a collector over `Breakers.States()` registered on the Prometheus adapter, and the request counter is an HTTP wrapper on it, so neither needed a port. `notifier_rate_limited_total` was dropped: `notifier_requests_total{status="429"}` is the same number.
+- **A breaker appears in `notifier_breaker_state` after its first use**, since the sender creates breakers lazily.
+- **The relay and the sender gained a small HTTP server** (health and `/metrics`) on `http.addr`, as the decision log says. Scrapes of `/metrics` are not counted as requests.
+- **`accepted_at` is set by the same statement for the sender and the janitor**; a delivery a webhook finishes first has none. The sender reports accept latency whenever its inbox write applied.
+- **Checked on the real stack** (`docker compose up`): the sender's histogram gave 0.1496 s and SQL `accepted_at - created_at` gave 0.1485 s for the same delivery.

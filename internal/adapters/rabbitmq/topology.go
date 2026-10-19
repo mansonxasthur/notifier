@@ -8,6 +8,10 @@ import (
 	"github.com/mansonxasthur/notifier/internal/domain"
 )
 
+// EnqueuedHeader is the message header holding the Unix time, in nanoseconds, at which the
+// publisher sent the message. The AMQP timestamp property only has a resolution of a second.
+const EnqueuedHeader = "enqueued_at_ns"
+
 // QueueName is the queue for a channel: the default exchange routes by this name.
 func QueueName(ch domain.Channel) string { return string(ch) }
 

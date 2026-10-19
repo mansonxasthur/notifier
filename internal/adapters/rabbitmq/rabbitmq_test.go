@@ -165,3 +165,59 @@ func TestBrokerRestart(t *testing.T) {
 	})
 	waitFor(t, "the post-restart message", func() bool { return got.has(3) })
 }
+
+type waits struct {
+	mu sync.Mutex
+	d  []time.Duration
+}
+
+func (w *waits) QueueWait(_ domain.Channel, d time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.d = append(w.d, d)
+}
+func (*waits) AcceptLatency(domain.Channel, bool, time.Duration) {}
+func (*waits) QueueDepth(domain.Channel, int)                    {}
+
+func (w *waits) count() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.d)
+}
+
+// A message that sat in the queue reports about as long as it sat there, and the depth
+// counts what is waiting.
+func TestQueueWaitAndDepth(t *testing.T) {
+	broker := rmqtest.Start(t)
+	conn := connect(t, broker.URL)
+	pub := rabbitmq.NewPublisher(conn, 5*time.Second)
+	t.Cleanup(pub.Stop)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if _, err := pub.Publish(ctx, domain.ChannelSMS, []int64{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "a depth of 3", func() bool {
+		n, err := conn.QueueDepth(ctx, domain.ChannelSMS)
+		return err == nil && n == 3
+	})
+	if n, err := conn.QueueDepth(ctx, domain.ChannelEmail); err != nil || n != 0 {
+		t.Errorf("email depth = %d, %v, want an empty queue", n, err)
+	}
+
+	const sat = 300 * time.Millisecond
+	time.Sleep(sat)
+	w := &waits{}
+	got := newCollector()
+	go rabbitmq.NewConsumer(conn, 10, quiet).WithRecorder(w).Consume(ctx, domain.ChannelSMS, got.handle) //nolint:errcheck // returns nil on cancel
+	waitFor(t, "three waits", func() bool { return w.count() == 3 })
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, d := range w.d {
+		if d < sat || d > 30*time.Second {
+			t.Errorf("wait = %v, want at least the %v the message sat", d, sat)
+		}
+	}
+}

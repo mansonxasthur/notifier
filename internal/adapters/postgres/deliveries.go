@@ -24,7 +24,7 @@ func NewDeliveryStore(db *Pool) *DeliveryStore { return &DeliveryStore{db: db} }
 
 // The content is stored once per notification, keyed by channel; the contact as {"address": ...}.
 const loadDelivery = `
-SELECT d.channel, d.contact ->> 'address', d.expires_at, d.state, n.content -> d.channel
+SELECT d.channel, d.contact ->> 'address', d.expires_at, d.state, d.created_at, n.content -> d.channel
 FROM deliveries d JOIN notifications n ON n.id = d.notification_id
 WHERE d.id = $1`
 
@@ -35,7 +35,7 @@ func (s *DeliveryStore) Load(ctx context.Context, id int64) (domain.DeliveryDeta
 		content []byte
 		expires time.Time
 	)
-	err := s.db.Pool().QueryRow(ctx, loadDelivery, id).Scan(&d.Channel, &d.Contact, &expires, &d.State, &content)
+	err := s.db.Pool().QueryRow(ctx, loadDelivery, id).Scan(&d.Channel, &d.Contact, &expires, &d.State, &d.CreatedAt, &content)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.DeliveryDetail{}, ports.ErrDeliveryNotFound
 	}
