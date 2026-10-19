@@ -16,6 +16,8 @@ type DeliveryStore interface {
 	// Load returns the delivery with its channel's content and contact. It returns
 	// ErrDeliveryNotFound when there is no such delivery.
 	Load(ctx context.Context, id int64) (domain.DeliveryDetail, error)
+	// LoadMany loads many deliveries in one query. An id with no delivery is left out of the map.
+	LoadMany(ctx context.Context, ids []int64) (map[int64]domain.DeliveryDetail, error)
 }
 
 // WebhookEvent is an authenticated provider webhook, with the delivery state it reports.

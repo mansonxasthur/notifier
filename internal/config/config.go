@@ -23,6 +23,7 @@ const MaxProviderTimeout = 5 * time.Second
 type Config struct {
 	ShutdownTimeout   time.Duration               `yaml:"shutdown_timeout"`
 	HTTP              HTTP                        `yaml:"http"`
+	Database          Database                    `yaml:"database"`
 	BatchLimit        int                         `yaml:"batch_limit"`
 	Accept            Accept                      `yaml:"accept"`
 	Limits            Limits                      `yaml:"limits"`
@@ -85,6 +86,13 @@ func (r RateLimit) Policy() domain.BucketPolicy {
 
 type HTTP struct {
 	Addr string `yaml:"addr"`
+}
+
+// Database holds the connection pool settings of every service.
+type Database struct {
+	// MaxConns is the most connections one process opens. All instances of all services
+	// together must stay under Postgres's max_connections.
+	MaxConns int `yaml:"max_conns"`
 }
 
 // NotificationType holds the per-type defaults, such as how long a delivery may wait.
@@ -183,6 +191,12 @@ type Sender struct {
 	MaxClaims    int           `yaml:"max_claims"`
 	// Prefetch is how many unacknowledged messages a sender holds per queue.
 	Prefetch int `yaml:"prefetch"`
+	// BatchSize is the most claims, loads or outcome writes the sender groups into one database
+	// call. Only messages in flight together can share a batch, so Prefetch should be a few times it.
+	BatchSize int `yaml:"batch_size"`
+	// Linger is how long a batch waits for more items before it is written, the latency one
+	// database stage adds when the sender is not busy.
+	Linger time.Duration `yaml:"linger"`
 	// ScanBatch is how many due retries one scan claims per channel, and so how many sends one
 	// channel can have in flight from the scan.
 	ScanBatch int `yaml:"scan_batch"`
@@ -307,6 +321,9 @@ func (c *Config) Validate() error {
 	if c.HTTP.Addr == "" {
 		bad("http.addr is required")
 	}
+	if c.Database.MaxConns <= 0 || c.Database.MaxConns > 1000 {
+		bad("database.max_conns must be between 1 and 1000")
+	}
 	if c.BatchLimit <= 0 {
 		bad("batch_limit must be positive")
 	}
@@ -375,6 +392,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Sender.Prefetch <= 0 {
 		bad("sender.prefetch must be positive")
+	}
+	if c.Sender.BatchSize <= 0 {
+		bad("sender.batch_size must be positive")
+	}
+	if c.Sender.Linger <= 0 {
+		bad("sender.linger must be positive")
 	}
 	if c.Sender.ScanBatch <= 0 {
 		bad("sender.scan_batch must be positive")

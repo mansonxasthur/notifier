@@ -148,7 +148,44 @@ const (
 	InboxClaimDuplicate
 	// InboxClaimDead: the delivery exceeded its claim cap and was failed.
 	InboxClaimDead
+	// InboxClaimMissing: no delivery has this ID, so there is nothing to claim.
+	InboxClaimMissing
 )
+
+// InboxOutcomeKind says how a sender's attempt ended, and so which update settles its inbox row.
+type InboxOutcomeKind int
+
+const (
+	// OutcomeComplete: the provider took the message. The row ends DONE, the delivery ACCEPTED.
+	OutcomeComplete InboxOutcomeKind = iota
+	// OutcomeFail: no retry can fix it. The row ends DEAD, the delivery FAILED with Reason.
+	OutcomeFail
+	// OutcomePark: a failed attempt to retry on the same provider, due at Next.
+	OutcomePark
+	// OutcomeSwitch: move to Provider with retries reset, due at Next.
+	OutcomeSwitch
+	// OutcomeDefer: the provider's rate limit had no token, so retry on the same provider at Next.
+	OutcomeDefer
+	// OutcomeUnresolve: the last provider's answer cannot be known. The row ends DEAD, the delivery UNRESOLVED.
+	OutcomeUnresolve
+)
+
+// InboxOutcome is the result of one claimed attempt, to be written to its inbox row. ClaimCount
+// is the fencing token: the write applies only while the row still carries it. Which of the other
+// fields are used depends on Kind.
+type InboxOutcome struct {
+	Kind       InboxOutcomeKind
+	DeliveryID int64
+	ClaimCount int
+	// Class is the failure class; empty is stored as NULL where the row keeps one.
+	Class FailureClass
+	// Reason is the failure reason of an OutcomeFail.
+	Reason FailureReason
+	// Provider is the provider an OutcomeSwitch moves to.
+	Provider string
+	// Next is when Park, Switch and Defer are due.
+	Next time.Time
+}
 
 // DueInbox is a retry the sender's scan claimed because its next_attempt_at had passed.
 // ClaimCount is the fencing token of the claim the scan took.

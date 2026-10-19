@@ -9,6 +9,11 @@ shutdown_timeout: 20s
 http:
   addr: ":8080"
 
+# Connections one process opens to Postgres. Every instance of every service draws from the
+# database's max_connections (100 by default), so keep the sum under it.
+database:
+  max_conns: 20
+
 # Largest accepted request, in recipients.
 batch_limit: 3000
 
@@ -139,8 +144,14 @@ sender:
   # How often the sender scans for retries that have become due.
   poll_interval: 200ms
   max_claims: 20
-  # Unacknowledged messages a sender holds per queue.
-  prefetch: 50
+  # Unacknowledged messages a sender holds per queue. Only messages in flight together can share
+  # a database batch, so keep this a few times batch_size.
+  prefetch: 200
+  # The sender groups the claims, loads and outcome writes of messages in flight together into
+  # one database call (one commit) of up to batch_size, written linger after the first at the
+  # latest. linger is the latency each database stage adds when the sender is not busy.
+  batch_size: 50
+  linger: 5ms
   # Due retries claimed per scan, for each channel: every channel has its own scan, so this is
   # also how many sends one channel can have in flight from it.
   scan_batch: 500

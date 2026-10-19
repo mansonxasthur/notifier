@@ -1,0 +1,52 @@
+{
+  "args": [
+    "-rate",
+    "150",
+    "-out",
+    "/home/manson/Projects/notifier/docs/results/load-2026-10-19-mixed-default-150",
+    "-label",
+    "mixed-default-150",
+    "-target",
+    "api=http://localhost:8080/metrics",
+    "-target",
+    "relay=http://localhost:8082/metrics",
+    "-target",
+    "sender=http://localhost:8083/metrics",
+    "-batch",
+    "100",
+    "-warmup",
+    "15s",
+    "-duration",
+    "60s",
+    "-drain-timeout",
+    "120s"
+  ],
+  "batch": 100,
+  "channels": [
+    "sms",
+    "email",
+    "whatsapp"
+  ],
+  "cores": 2,
+  "deliveries_per_second": 450,
+  "duration": "1m0s",
+  "git_dirty": true,
+  "git_sha": "ddd4e1e23746dd2ee0d351e48bb1404c2bbb14a8",
+  "go": "go1.26.3",
+  "hardware": {
+    "cpu": "Intel(R) Core(TM) i5-4570 CPU @ 3.20GHz",
+    "kernel": "Linux version 7.0.0-38-generic (buildd@lcy02-amd64-070) (x86_64-linux-gnu-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0, GNU ld (",
+    "memory": "15733948 kB"
+  },
+  "label": "mixed-default-150",
+  "max_in_flight": 2000,
+  "primaries": [
+    "sms-a",
+    "email-a",
+    "whatsapp-a"
+  ],
+  "recipients_per_second": 150,
+  "run_id": "r1792383009",
+  "started": "2026-10-19T07:10:09+03:00",
+  "warmup": "15s"
+}

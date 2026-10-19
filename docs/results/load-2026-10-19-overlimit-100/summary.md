@@ -1,0 +1,31 @@
+# overlimit-100
+
+Run `r1792381553`, started 2026-10-19T06:45:53+03:00. Setup is in `params.json`; queries and raw answers in `sql.txt`; every metric sample in `samples.csv`.
+
+## Load
+
+- 100 recipients/s x 3 channels = **300 deliveries/s** target, in requests of 100 recipients (1 requests/s), for 1m0s after a 5s warm-up.
+- Requests scheduled 60; answered map[202:46 429:14]; transport errors 0; **skipped by the driver 0** (in-flight limit 2000); latest request left 2ms late.
+- Deliveries the API accepted: 13800 (target 18000). HTTP latency of answered requests: p50 40ms, p99 72ms, max 78ms.
+- Refused with 429: 14 requests; largest Retry-After 2 s.
+
+## Request to ACCEPTED (from `accepted_at - created_at`, exact)
+
+| Deliveries | Count | p50 | p95 | p99 | max | p99 vs 5 s |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| first attempt (primary provider, no retry) | 13800 | 0.183 s | 0.336 s | 0.523 s | 0.557 s | within |
+| retried or failed over | 0 | – | – | – | – | – |
+
+## Outcome
+
+- Stored 13800 deliveries (13800 expected from accepted requests); 13800 have `accepted_at`.
+  - DELIVERED: 13800
+- After the last request the system took 500ms to settle (drained).
+
+## Metrics (scraped every 1s, 0 scrapes failed)
+
+- Queue wait, sms (5100 messages including the warm-up; estimated from buckets, so shape only): p50 0.029 s, p99 0.240 s.
+- Queue wait, email (5100 messages including the warm-up; estimated from buckets, so shape only): p50 0.023 s, p99 0.236 s.
+- Queue wait, whatsapp (5100 messages including the warm-up; estimated from buckets, so shape only): p50 0.031 s, p99 0.380 s.
+- Peak queue depth: 0 (notifier_queue_depth{channel=email}).
+- Highest breaker state seen: 0 (notifier_breaker_state{provider=email-a}); 0 closed, 1 half-open, 2 open.

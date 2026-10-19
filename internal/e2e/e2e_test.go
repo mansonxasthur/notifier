@@ -215,10 +215,12 @@ func newStack(t *testing.T, tune ...func(*config.Config)) *stack {
 	attempt := sender.NewAttempt(postgres.NewDeliveryStore(db), inbox, providers, providers,
 		sender.NewBreakers(cfg.Sender.Breaker.Policy(), time.Now),
 		sender.NewProviderLimits(cfg.ProviderRateLimits(), time.Now),
-		sender.Routing{Order: cfg.ProviderOrder(), Policies: cfg.ProviderRetryPolicies()}, quiet)
-	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.ClaimLimits(), attempt.Send, quiet)
+		sender.Routing{Order: cfg.ProviderOrder(), Policies: cfg.ProviderRetryPolicies()}, quiet).
+		WithBatching(cfg.Sender.BatchSize, cfg.Sender.Linger)
+	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.ClaimLimits(), attempt.Send, quiet).
+		WithBatching(cfg.Sender.BatchSize, cfg.Sender.Linger)
 	scan := sender.NewScan(inbox, attempt.Send, cfg.Sender.PollInterval, cfg.Sender.ScanBatch, cfg.Sender.ClaimLimits(), quiet)
-	start(t, sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, quiet), intake, scan))
+	start(t, sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, quiet), intake, scan, attempt))
 
 	return &stack{db: db, apiURL: apiURL, simURL: simURL, sent: sent}
 }

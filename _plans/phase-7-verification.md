@@ -125,3 +125,14 @@ A `make fault name=<run>` target drives each one through `cmd/loadtest` plus a s
 - **The relay and the sender gained a small HTTP server** (health and `/metrics`) on `http.addr`, as the decision log says. Scrapes of `/metrics` are not counted as requests.
 - **`accepted_at` is set by the same statement for the sender and the janitor**; a delivery a webhook finishes first has none. The sender reports accept latency whenever its inbox write applied.
 - **Checked on the real stack** (`docker compose up`): the sender's histogram gave 0.1496 s and SQL `accepted_at - created_at` gave 0.1485 s for the same delivery.
+
+## Deviations made while building Part C
+
+- **The CPU split became part of the method.** A first pass with one core for the simulator and the driver showed failures that were the rig's, not the system's; a second pass with two cores each gave clean results at the same load. The plan assumed the simulator was cheap.
+- **A step is not a hold.** The stepped ramp's pass criterion was widened (any FAILED or UNRESOLVED delivery, or an opened breaker, fails a step) after a step that passed on p99 alone had thousands of failed deliveries. The headline is the highest rate held 5 minutes, found by holding, not by the ramp.
+- **`database.max_conns`** was added (shipped 20) because the plan said to settle the pool size. The runs did not show it to be the limit.
+- **The Postgres bottleneck was not isolated.** The plan asked to name what saturates first; the data names Postgres as where throughput stops growing, not why. A diagnostic with asynchronous commits was confounded by the rig limit. The outbox churn check (`pg-stats.txt`): in the 5-minute holds dead tuples stayed under 2% of rows with 6 autovacuums and one checkpoint; in the overloaded 750/s step they reached 9% of `deliveries` and 13% of `inbox` with only 2 autovacuums, so vacuum lags under overload. No tuning was done.
+- **Mixed runs** use the default weights and a milder mix, both at 150 recipients/s. They found the breaker amplification above.
+- **Fewer rates than planned.** The planned ramp went to 10K recipients/s; the machine fails at 200, so the ramp stopped there. Larger steps would have measured the rig.
+- **Not done:** a rerun of the headline to show run-to-run noise, and the plan's separate "second run keeps the provider limit" case.
+- **Loadtest stack files:** `docker-compose.loadtest.yml` is a separate file used without the dev override; `loadtest/run.sh` writes a `FAILED.txt` and tears the stack down if a run cannot start, so a run never waits forever.

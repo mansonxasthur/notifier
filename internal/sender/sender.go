@@ -14,13 +14,19 @@ type Sender struct {
 	consumer ports.Consumer
 	intake   *Intake
 	scan     *Scan
+	closers  []Closer
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
-func New(consumer ports.Consumer, intake *Intake, scan *Scan) *Sender {
-	return &Sender{consumer: consumer, intake: intake, scan: scan}
+// Closer is something that holds batches back and must flush them when the sender stops.
+type Closer interface{ Close() }
+
+// New returns a Sender. closers are closed once every in-flight message has finished, so the
+// batches they hold are written before the sender returns from Stop.
+func New(consumer ports.Consumer, intake *Intake, scan *Scan, closers ...Closer) *Sender {
+	return &Sender{consumer: consumer, intake: intake, scan: scan, closers: append([]Closer{intake}, closers...)}
 }
 
 func (s *Sender) Name() string { return "sender" }
@@ -48,6 +54,13 @@ func (s *Sender) Stop(ctx context.Context) error {
 	s.cancel()
 	done := make(chan struct{})
 	go func() { s.wg.Wait(); close(done) }()
+	// Whatever the wait ends in, the batches still held are written: an outcome left in one would
+	// leave a message the provider took for the janitor to resend.
+	defer func() {
+		for _, c := range s.closers {
+			c.Close()
+		}
+	}()
 	select {
 	case <-done:
 		return nil

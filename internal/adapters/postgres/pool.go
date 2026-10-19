@@ -14,18 +14,33 @@ import (
 
 // Pool is a lifecycle component around a pgx connection pool.
 type Pool struct {
-	url  string
-	pool *pgxpool.Pool
+	url      string
+	maxConns int32
+	pool     *pgxpool.Pool
 }
 
+// New returns a pool with the library's default size.
 func New(url string) *Pool { return &Pool{url: url} }
+
+// WithMaxConns sets the most connections the pool opens.
+func (p *Pool) WithMaxConns(n int) *Pool {
+	p.maxConns = int32(n) //nolint:gosec // validated config, a handful of connections
+	return p
+}
 
 func (p *Pool) Name() string { return "postgres" }
 
 // Start connects, retrying while the database boots, and verifies with a ping.
 func (p *Pool) Start(ctx context.Context) error {
 	return lifecycle.Retry(ctx, 10, time.Second, func(ctx context.Context) error {
-		pool, err := pgxpool.New(ctx, p.url)
+		cfg, err := pgxpool.ParseConfig(p.url)
+		if err != nil {
+			return fmt.Errorf("parse url: %w", err)
+		}
+		if p.maxConns > 0 {
+			cfg.MaxConns = p.maxConns
+		}
+		pool, err := pgxpool.NewWithConfig(ctx, cfg)
 		if err != nil {
 			return fmt.Errorf("open pool: %w", err)
 		}

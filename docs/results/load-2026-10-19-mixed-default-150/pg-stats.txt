@@ -1,0 +1,15 @@
+ num_timed | num_requested | restartpoints_timed | restartpoints_req | restartpoints_done | write_time | sync_time | buffers_written |          stats_reset          
+-----------+---------------+---------------------+-------------------+--------------------+------------+-----------+-----------------+-------------------------------
+         0 |             1 |                   0 |                 0 |                  0 |         24 |        14 |             923 | 2026-10-19 04:10:01.766161+00
+(1 row)
+
+      relname      | n_live_tup | n_dead_tup | autovacuum_count | autoanalyze_count 
+-------------------+------------+------------+------------------+-------------------
+ deliveries        |      33900 |         85 |                2 |                 2
+ inbox             |      34391 |       3153 |                2 |                 2
+ notifications     |        114 |          0 |                0 |                 1
+ outbox            |      34500 |       2011 |                2 |                 2
+ schema_migrations |          1 |          0 |                0 |                 0
+ webhook_events    |       3850 |          0 |                1 |                 2
+(6 rows)
+

@@ -1,0 +1,5 @@
+# HELP notifier_requests_total HTTP requests handled, by status code.
+# TYPE notifier_requests_total counter
+notifier_requests_total{status="200"} 15301
+notifier_requests_total{status="202"} 51
+notifier_requests_total{status="429"} 14

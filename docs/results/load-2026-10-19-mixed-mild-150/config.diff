@@ -1,0 +1,4 @@
+52c52
+<   weights: {succeed: 70, fail_permanent: 5, fail_transient: 10, slow: 5, timeout: 5, late_failure: 5}
+---
+>   weights: {succeed: 94, fail_transient: 2, slow: 2, timeout: 1, late_failure: 1}

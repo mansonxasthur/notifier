@@ -43,6 +43,9 @@ type Attempt struct {
 	routing    Routing
 	log        *slog.Logger
 	rec        ports.Recorder
+	// loader and settler group the concurrent attempts' database reads and writes into batches.
+	loader  *Coalescer[int64, loaded]
+	settler *Coalescer[domain.InboxOutcome, bool]
 
 	now    func() time.Time
 	jitter func() float64
@@ -53,13 +56,65 @@ type Attempt struct {
 // NewAttempt returns an Attempt. limits may be nil, which leaves every provider unlimited.
 func NewAttempt(deliveries ports.DeliveryStore, inbox ports.InboxStore, providers Providers, checker ports.ProviderChecker,
 	breakers *Breakers, limits *ProviderLimits, routing Routing, log *slog.Logger) *Attempt {
-	return &Attempt{
+	a := &Attempt{
 		deliveries: deliveries, inbox: inbox, providers: providers, checker: checker,
 		breakers: breakers, limits: limits, routing: routing, log: log,
 		rec:    ports.NopRecorder{},
 		now:    time.Now,
 		jitter: rand.Float64, //nolint:gosec // jitter spreads retries, it is not a secret
 	}
+	// A batch of one: every attempt reads and writes alone until WithBatching says otherwise.
+	return a.WithBatching(1, 0)
+}
+
+// WithBatching makes concurrent attempts share their database work: loads and outcome writes are
+// grouped into batches of up to size, flushed after linger at the latest.
+func (a *Attempt) WithBatching(size int, linger time.Duration) *Attempt {
+	a.loader = NewCoalescer(size, linger, func(ctx context.Context, ids []int64) ([]loaded, error) {
+		found, err := a.deliveries.LoadMany(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]loaded, len(ids))
+		for i, id := range ids {
+			out[i].d, out[i].ok = found[id]
+		}
+		return out, nil
+	})
+	a.settler = NewCoalescer(size, linger, func(ctx context.Context, outcomes []domain.InboxOutcome) ([]bool, error) {
+		return a.inbox.Settle(ctx, outcomes)
+	})
+	return a
+}
+
+// Close flushes the batches still waiting. Call it after the last attempt has returned.
+func (a *Attempt) Close() {
+	a.loader.Close()
+	a.settler.Close()
+}
+
+// loaded is one delivery of a batch load: ok is false when no delivery has the ID.
+type loaded struct {
+	d  domain.DeliveryDetail
+	ok bool
+}
+
+// load reads the delivery through the shared batch.
+func (a *Attempt) load(ctx context.Context, id int64) (domain.DeliveryDetail, error) {
+	l, err := a.loader.Do(ctx, id)
+	if err != nil {
+		return domain.DeliveryDetail{}, err
+	}
+	if !l.ok {
+		return domain.DeliveryDetail{}, ports.ErrDeliveryNotFound
+	}
+	return l.d, nil
+}
+
+// write records an attempt's outcome in the inbox through the shared batch. False means the claim
+// was stale.
+func (a *Attempt) write(ctx context.Context, o domain.InboxOutcome) (bool, error) {
+	return a.settler.Do(ctx, o)
 }
 
 // WithRecorder makes the attempt report the latency of every delivery it accepts.
@@ -91,7 +146,7 @@ type attemptRun struct {
 // provider, the failure class and the outcome, and never with the contact. An error that
 // leaves the row for the janitor is returned instead, and the caller logs it.
 func (a *Attempt) Send(ctx context.Context, c Claimed) error {
-	d, err := a.deliveries.Load(ctx, c.DeliveryID)
+	d, err := a.load(ctx, c.DeliveryID)
 	if err != nil {
 		return fmt.Errorf("load delivery %d: %w", c.DeliveryID, err)
 	}
@@ -100,7 +155,7 @@ func (a *Attempt) Send(ctx context.Context, c Claimed) error {
 	if d.State != domain.DeliveryPending {
 		settleCtx, cancel := settleContext(ctx)
 		defer cancel()
-		applied, err := a.inbox.Complete(settleCtx, c.DeliveryID, c.ClaimCount)
+		applied, err := a.write(settleCtx, domain.InboxOutcome{Kind: domain.OutcomeComplete, DeliveryID: c.DeliveryID, ClaimCount: c.ClaimCount})
 		if err != nil {
 			return err
 		}
@@ -267,7 +322,7 @@ func (a *Attempt) retryOrMove(ctx context.Context, run attemptRun, class domain.
 		// The delay grows with the retries already spent on this provider, not with claims,
 		// which the janitor's reclaims also add to.
 		next := a.now().Add(run.policy.Backoff.Delay(c.Retries+1, a.jitter()))
-		applied, err := a.inbox.Park(ctx, c.DeliveryID, c.ClaimCount, class, next)
+		applied, err := a.write(ctx, domain.InboxOutcome{Kind: domain.OutcomePark, DeliveryID: c.DeliveryID, ClaimCount: c.ClaimCount, Class: class, Next: next})
 		if err != nil {
 			return err
 		}
@@ -294,7 +349,7 @@ func (a *Attempt) throttle(ctx context.Context, run attemptRun, wait time.Durati
 	if !expiresAt.IsZero() && next.After(expiresAt) {
 		next = expiresAt
 	}
-	applied, err := a.inbox.Defer(ctx, c.DeliveryID, c.ClaimCount, next)
+	applied, err := a.write(ctx, domain.InboxOutcome{Kind: domain.OutcomeDefer, DeliveryID: c.DeliveryID, ClaimCount: c.ClaimCount, Next: next})
 	if err != nil {
 		return err
 	}
@@ -305,7 +360,7 @@ func (a *Attempt) throttle(ctx context.Context, run attemptRun, wait time.Durati
 // switchTo moves the row to the channel's next provider, due now, with retries reset.
 func (a *Attempt) switchTo(ctx context.Context, run attemptRun, class domain.FailureClass, why string, extra ...any) error {
 	c := run.c
-	applied, err := a.inbox.Switch(ctx, c.DeliveryID, c.ClaimCount, run.next, class, a.now())
+	applied, err := a.write(ctx, domain.InboxOutcome{Kind: domain.OutcomeSwitch, DeliveryID: c.DeliveryID, ClaimCount: c.ClaimCount, Provider: run.next, Class: class, Next: a.now()})
 	if err != nil {
 		return err
 	}
@@ -315,7 +370,7 @@ func (a *Attempt) switchTo(ctx context.Context, run attemptRun, class domain.Fai
 
 func (a *Attempt) complete(ctx context.Context, run attemptRun, class domain.FailureClass, extra ...any) error {
 	c := run.c
-	applied, err := a.inbox.Complete(ctx, c.DeliveryID, c.ClaimCount)
+	applied, err := a.write(ctx, domain.InboxOutcome{Kind: domain.OutcomeComplete, DeliveryID: c.DeliveryID, ClaimCount: c.ClaimCount})
 	if err != nil {
 		return err
 	}
@@ -328,7 +383,7 @@ func (a *Attempt) complete(ctx context.Context, run attemptRun, class domain.Fai
 
 func (a *Attempt) fail(ctx context.Context, run attemptRun, class domain.FailureClass, reason domain.FailureReason, extra ...any) error {
 	c := run.c
-	applied, err := a.inbox.Fail(ctx, c.DeliveryID, c.ClaimCount, class, reason)
+	applied, err := a.write(ctx, domain.InboxOutcome{Kind: domain.OutcomeFail, DeliveryID: c.DeliveryID, ClaimCount: c.ClaimCount, Class: class, Reason: reason})
 	if err != nil {
 		return err
 	}
@@ -338,7 +393,7 @@ func (a *Attempt) fail(ctx context.Context, run attemptRun, class domain.Failure
 
 func (a *Attempt) unresolve(ctx context.Context, run attemptRun, why string, cause error) error {
 	c := run.c
-	applied, err := a.inbox.Unresolve(ctx, c.DeliveryID, c.ClaimCount, domain.FailureTimeout)
+	applied, err := a.write(ctx, domain.InboxOutcome{Kind: domain.OutcomeUnresolve, DeliveryID: c.DeliveryID, ClaimCount: c.ClaimCount, Class: domain.FailureTimeout})
 	if err != nil {
 		return err
 	}

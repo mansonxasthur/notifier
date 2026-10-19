@@ -41,7 +41,7 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	if err != nil {
 		return nil, err
 	}
-	db := postgres.New(cfg.DatabaseURL)
+	db := postgres.New(cfg.DatabaseURL).WithMaxConns(cfg.Database.MaxConns)
 	cache := redis.New(cfg.RedisURL)
 	limiter := ratelimit.NewFallback(
 		redis.NewLimiter(cache.Scripter(), globalBucketKey, cfg.Limits.Global.Policy()),

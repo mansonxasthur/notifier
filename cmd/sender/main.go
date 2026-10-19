@@ -23,7 +23,7 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	if err := cfg.Require(config.Postgres, config.RabbitMQ); err != nil {
 		return nil, err
 	}
-	db := postgres.New(cfg.DatabaseURL)
+	db := postgres.New(cfg.DatabaseURL).WithMaxConns(cfg.Database.MaxConns)
 	mq := rabbitmq.New(cfg.AMQPURL)
 
 	inbox := postgres.NewInboxStore(db)
@@ -33,10 +33,12 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	attempt := sender.NewAttempt(postgres.NewDeliveryStore(db), inbox, providers, providers,
 		breakers,
 		sender.NewProviderLimits(cfg.ProviderRateLimits(), time.Now),
-		sender.Routing{Order: cfg.ProviderOrder(), Policies: cfg.ProviderRetryPolicies()}, log).WithRecorder(metrics)
-	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.ClaimLimits(), attempt.Send, log)
+		sender.Routing{Order: cfg.ProviderOrder(), Policies: cfg.ProviderRetryPolicies()}, log).
+		WithRecorder(metrics).WithBatching(cfg.Sender.BatchSize, cfg.Sender.Linger)
+	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.ClaimLimits(), attempt.Send, log).
+		WithBatching(cfg.Sender.BatchSize, cfg.Sender.Linger)
 	scan := sender.NewScan(inbox, attempt.Send, cfg.Sender.PollInterval, cfg.Sender.ScanBatch, cfg.Sender.ClaimLimits(), log)
-	s := sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, log).WithRecorder(metrics), intake, scan)
+	s := sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, log).WithRecorder(metrics), intake, scan, attempt)
 
 	// Every configured provider is exported from the start, closed until its breaker says otherwise.
 	metrics.BreakerStates(func() map[string]int {

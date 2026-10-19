@@ -1,0 +1,8 @@
+33c33
+<   global: {rate: 500000, burst: 1000000}
+---
+>   global: {rate: 100, burst: 9000}
+50c50
+<   mode: random
+---
+>   mode: succeed

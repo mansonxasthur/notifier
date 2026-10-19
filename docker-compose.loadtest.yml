@@ -1,0 +1,43 @@
+# The load-test stack: the built images (no live reload), the metrics ports published for the
+# driver, and a config chosen per run. Use it on its own, without the dev override:
+#   LOAD_CONFIG=/abs/path/config.yaml docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d --build
+# loadtest/run.sh does this, and writes the config it used next to the results.
+#
+# Logging: every service logs warnings and errors only. At hundreds of deliveries a second the
+# per-delivery Info lines cost the simulator and the services real CPU, and what the runs look
+# for (breaker changes, failures, stale claims) is logged at warning or above.
+#
+# CPU pinning: the simulated provider and the driver are not part of the system under test, so
+# they get their own core (SIM_CPUS) and the system gets the rest (SUT_CPUS). The defaults fit
+# the 4-core machine the recorded results come from; change both for another machine.
+services:
+  postgres:
+    # PG_SYNC_COMMIT=off is a diagnostic only, to tell whether commits waiting for the disk set
+    # the pace. A run with it off is labelled as such and is never a result to quote.
+    command: ["postgres", "-c", "synchronous_commit=${PG_SYNC_COMMIT:-on}"]
+    cpuset: "${SUT_CPUS:-0-2}"
+    ports: ["5432:5432"]
+  rabbitmq:
+    cpuset: "${SUT_CPUS:-0-2}"
+  redis:
+    cpuset: "${SUT_CPUS:-0-2}"
+  migrate:
+    cpuset: "${SUT_CPUS:-0-2}"
+  api:
+    environment: {LOG_LEVEL: warn}
+    cpuset: "${SUT_CPUS:-0-2}"
+    volumes: ["${LOAD_CONFIG:?set LOAD_CONFIG to the config file of this run}:/etc/notifier/config.yaml:ro"]
+  relay:
+    environment: {LOG_LEVEL: warn}
+    cpuset: "${SUT_CPUS:-0-2}"
+    volumes: ["${LOAD_CONFIG}:/etc/notifier/config.yaml:ro"]
+    ports: ["8082:8080"]
+  sender:
+    environment: {LOG_LEVEL: warn}
+    cpuset: "${SUT_CPUS:-0-2}"
+    volumes: ["${LOAD_CONFIG}:/etc/notifier/config.yaml:ro"]
+    ports: ["8083:8080"]
+  simprovider:
+    environment: {LOG_LEVEL: warn}
+    cpuset: "${SIM_CPUS:-3}"
+    volumes: ["${LOAD_CONFIG}:/etc/notifier/config.yaml:ro"]
