@@ -141,8 +141,12 @@ sender:
   max_claims: 20
   # Unacknowledged messages a sender holds per queue.
   prefetch: 50
-  # Due retries claimed per scan.
-  scan_batch: 50
+  # Due retries claimed per scan, for each channel: every channel has its own scan, so this is
+  # also how many sends one channel can have in flight from it.
+  scan_batch: 500
+  # Times a row may be put back for a provider's rate limit without costing a claim. Past it,
+  # each deferral counts against max_claims, so a limit far below the load cannot defer a row forever.
+  max_deferrals: 1000
   # One local breaker per provider: it opens after this many consecutive failures and lets
   # one probe through once open_for has passed.
   breaker:

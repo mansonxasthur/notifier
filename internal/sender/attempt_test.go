@@ -122,7 +122,7 @@ func newFixture(t *testing.T, sendErr error) *fixture {
 	}
 
 	inbox := postgres.NewInboxStore(db)
-	c, err := inbox.Claim(ctx, id, "sms-a", 5)
+	c, err := inbox.Claim(ctx, id, "sms-a", domain.Claims(5))
 	if err != nil || c.Result != domain.InboxClaimWon {
 		t.Fatalf("claim = %+v, %v", c, err)
 	}

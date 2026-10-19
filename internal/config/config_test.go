@@ -255,6 +255,7 @@ func TestValidateRejects(t *testing.T) {
 			cc.Providers[1].RateLimit.Burst = 0
 			setEmail(c, cc)
 		}, "rate_limit"},
+		{"sender deferrals zero", func(c *Config) { c.Sender.MaxDeferrals = 0 }, "sender.max_deferrals"},
 		{"sender claims zero", func(c *Config) { c.Sender.MaxClaims = 0 }, "sender.max_claims"},
 	}
 	for _, tt := range tests {

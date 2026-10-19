@@ -13,12 +13,12 @@ type InboxStore interface {
 	// sender. The first claim inserts the row as PROCESSING with the given provider; a row
 	// in WAITING_RETRY whose next_attempt_at has passed can be claimed again, with the
 	// provider the row now carries; anything else is a duplicate (the scan owns a retry that
-	// is not yet due). A claim that would pass maxClaims ends the row DEAD and the delivery FAILED.
-	Claim(ctx context.Context, deliveryID int64, provider string, maxClaims int) (domain.InboxClaim, error)
-	// ClaimDue claims up to limit rows in WAITING_RETRY whose next_attempt_at has passed, moving
-	// them to PROCESSING, so concurrent senders never take the same row. A row that would pass
-	// maxClaims ends DEAD and its delivery FAILED, and is not returned.
-	ClaimDue(ctx context.Context, limit int, maxClaims int) ([]domain.DueInbox, error)
+	// is not yet due). A claim that would pass limits.MaxClaims ends the row DEAD and the delivery FAILED.
+	Claim(ctx context.Context, deliveryID int64, provider string, limits domain.ClaimLimits) (domain.InboxClaim, error)
+	// ClaimDue claims up to limit rows of the channel in WAITING_RETRY whose next_attempt_at has
+	// passed, moving them to PROCESSING, so concurrent senders never take the same row. A row
+	// that would pass limits.MaxClaims ends DEAD and its delivery FAILED, and is not returned.
+	ClaimDue(ctx context.Context, channel domain.Channel, limit int, limits domain.ClaimLimits) ([]domain.DueInbox, error)
 	// ListStuck returns up to limit rows of the provider left in PROCESSING longer than olderThan.
 	ListStuck(ctx context.Context, provider string, olderThan time.Duration, limit int) ([]domain.StuckInbox, error)
 	// Requeue moves a stuck row to WAITING_RETRY, due at next, and adds one to retries, as a

@@ -180,8 +180,8 @@ func newStack(t *testing.T, tune ...func(*config.Config)) *stack {
 		sender.NewBreakers(cfg.Sender.Breaker.Policy(), time.Now),
 		sender.NewProviderLimits(cfg.ProviderRateLimits(), time.Now),
 		sender.Routing{Order: cfg.ProviderOrder(), Policies: cfg.ProviderRetryPolicies()}, quiet)
-	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.MaxClaims, attempt.Send, quiet)
-	scan := sender.NewScan(inbox, attempt.Send, cfg.Sender.PollInterval, cfg.Sender.ScanBatch, cfg.Sender.MaxClaims, quiet)
+	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.ClaimLimits(), attempt.Send, quiet)
+	scan := sender.NewScan(inbox, attempt.Send, cfg.Sender.PollInterval, cfg.Sender.ScanBatch, cfg.Sender.ClaimLimits(), quiet)
 	start(t, sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, quiet), intake, scan))
 
 	return &stack{db: db, apiURL: apiURL, simURL: simURL}

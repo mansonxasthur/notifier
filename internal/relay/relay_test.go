@@ -229,7 +229,7 @@ func TestJanitorRecoversStuckInbox(t *testing.T) {
 		if i == 4 || i == 6 || i == 10 {
 			provider = "sms-b"
 		}
-		if _, err := inbox.Claim(ctx, id, provider, 5); err != nil {
+		if _, err := inbox.Claim(ctx, id, provider, domain.Claims(5)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -346,8 +346,8 @@ func startSender(t *testing.T, db *postgres.Pool, mq *rabbitmq.Conn) *countingSe
 	inbox := postgres.NewInboxStore(db)
 	intake := sender.NewIntake(inbox, map[domain.Channel]string{
 		domain.ChannelEmail: "email-a", domain.ChannelSMS: "sms-a", domain.ChannelWhatsApp: "whatsapp-a",
-	}, 5, cs.send, quiet)
-	scan := sender.NewScan(inbox, cs.send, time.Hour, 10, 5, quiet) // nothing here parks a row
+	}, domain.Claims(5), cs.send, quiet)
+	scan := sender.NewScan(inbox, cs.send, time.Hour, 10, domain.Claims(5), quiet) // nothing here parks a row
 	start(t, sender.New(rabbitmq.NewConsumer(mq, 10, quiet), intake, scan))
 	return cs
 }

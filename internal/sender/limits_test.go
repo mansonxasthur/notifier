@@ -200,7 +200,7 @@ func TestDeferralsDoNotCountTowardsTheClaimCap(t *testing.T) {
 		if _, err := f.db.Pool().Exec(ctx, `UPDATE inbox SET next_attempt_at = now() - interval '1 second'`); err != nil {
 			t.Fatal(err)
 		}
-		due, err := f.inbox.ClaimDue(ctx, 10, maxClaims)
+		due, err := f.inbox.ClaimDue(ctx, domain.ChannelSMS, 10, domain.Claims(maxClaims))
 		if err != nil || len(due) != 1 {
 			t.Fatalf("deferral %d: ClaimDue = %v, %v; want the row claimable again", i, due, err)
 		}
@@ -246,7 +246,7 @@ func TestSpikeDrainsWithoutExceedingTheProviderRate(t *testing.T) {
 		if id == f.id {
 			continue
 		}
-		if _, err := f.inbox.Claim(ctx, id, "sms-a", 100); err != nil {
+		if _, err := f.inbox.Claim(ctx, id, "sms-a", domain.Claims(100)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -254,10 +254,10 @@ func TestSpikeDrainsWithoutExceedingTheProviderRate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	scan := NewScan(f.inbox, f.attempt.Send, time.Hour, 10, 100, quiet)
+	scan := NewScan(f.inbox, f.attempt.Send, time.Hour, 10, domain.Claims(100), quiet)
 	start := f.clock.now()
 	for step := 0; step < 400 && len(f.prov.calls) < spike; step++ {
-		if _, err := scan.Once(ctx); err != nil {
+		if _, err := scan.Once(ctx, domain.ChannelSMS); err != nil {
 			t.Fatal(err)
 		}
 		// Make every deferred row due, as the real clock would after its wait.
