@@ -6,30 +6,44 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mansonxasthur/notifier/internal/domain"
 	"github.com/mansonxasthur/notifier/internal/ports"
 )
 
 // Scan sends the retries that have become due. A parked or switched inbox row waits in
 // WAITING_RETRY with a next_attempt_at; nothing goes back through the outbox or the broker,
 // so the scan is the only thing that picks a retry up.
+//
+// Each channel has its own scan loop, so a backlog on one channel, or its provider's rate
+// limit, cannot fill the batches and starve the others.
 type Scan struct {
-	inbox     ports.InboxStore
-	send      Send
-	interval  time.Duration
-	batch     int
-	maxClaims int
-	log       *slog.Logger
+	inbox    ports.InboxStore
+	send     Send
+	interval time.Duration
+	batch    int
+	limits   domain.ClaimLimits
+	log      *slog.Logger
 }
 
-// NewScan returns a Scan that looks for due retries every interval and claims up to batch
-// of them at a time, with at most maxClaims claims per delivery.
-func NewScan(inbox ports.InboxStore, send Send, interval time.Duration, batch, maxClaims int, log *slog.Logger) *Scan {
-	return &Scan{inbox: inbox, send: send, interval: interval, batch: batch, maxClaims: maxClaims, log: log}
+// NewScan returns a Scan that looks for due retries of each channel every interval and claims up
+// to batch of a channel's at a time, within the claim limits.
+func NewScan(inbox ports.InboxStore, send Send, interval time.Duration, batch int, limits domain.ClaimLimits, log *slog.Logger) *Scan {
+	return &Scan{inbox: inbox, send: send, interval: interval, batch: batch, limits: limits, log: log}
 }
 
-// Run scans until ctx is done, then waits for the sends already started. A full batch
-// means more may be due, so the next scan follows at once instead of after the interval.
+// Run scans every channel until ctx is done, then waits for the sends already started.
 func (s *Scan) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+	for _, ch := range domain.Channels() {
+		wg.Go(func() { s.runChannel(ctx, ch) })
+	}
+	wg.Wait()
+}
+
+// runChannel is one channel's loop. A scan that found anything means more may be due behind it,
+// so the next scan follows at once; one that found nothing waits for the interval. (A full batch
+// is not the test: rows the claim cap ended are consumed from the batch but not returned.)
+func (s *Scan) runChannel(ctx context.Context, ch domain.Channel) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
@@ -38,23 +52,23 @@ func (s *Scan) Run(ctx context.Context) {
 			return
 		case <-timer.C:
 		}
-		n, err := s.Once(ctx)
+		n, err := s.Once(ctx, ch)
 		if err != nil && ctx.Err() == nil {
-			s.log.Error("retry scan failed", "error", err)
+			s.log.Error("retry scan failed", "channel", ch, "error", err)
 		}
 		wait := s.interval
-		if err == nil && n >= s.batch {
+		if err == nil && n > 0 {
 			wait = 0
 		}
 		timer.Reset(wait)
 	}
 }
 
-// Once claims the due retries, sends them concurrently, and returns how many it claimed.
-// It returns after every send has finished. A send that fails leaves its row in
+// Once claims the channel's due retries, sends them concurrently, and returns how many it
+// claimed. It returns after every send has finished. A send that fails leaves its row in
 // PROCESSING, where the janitor recovers it.
-func (s *Scan) Once(ctx context.Context) (int, error) {
-	due, err := s.inbox.ClaimDue(ctx, s.batch, s.maxClaims)
+func (s *Scan) Once(ctx context.Context, ch domain.Channel) (int, error) {
+	due, err := s.inbox.ClaimDue(ctx, ch, s.batch, s.limits)
 	if err != nil {
 		return 0, err
 	}

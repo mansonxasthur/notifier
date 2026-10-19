@@ -128,12 +128,12 @@ Done when each simulated failure mode ends in the state the Decision Log describ
 
 Goal: overload is refused cleanly at the door, and bursts that were accepted drain at a pace providers can take.
 
-- [ ] Global rate limit in deliveries per second, enforced in the Dispatcher
-- [ ] Limit value configurable and sized from the system's 500K per second peak
-- [ ] 429 with `Retry-After` when a limit is exceeded
-- [ ] Shared rate-limit counters in Redis, used by every Dispatcher instance, and falling back to a local in-memory limiter when Redis is unreachable
-- [ ] Per-provider token bucket in the sender in front of every provider call
-- [ ] Burst handling: reject above a limit with 429 and Retry-After; accepted requests are held in the queue and the outbox
+- [x] Global rate limit in deliveries per second, enforced in the Dispatcher
+- [x] Limit value configurable and sized from the system's 500K per second peak
+- [x] 429 with `Retry-After` when a limit is exceeded
+- [x] Shared rate-limit counters in Redis, used by every Dispatcher instance, and falling back to a local in-memory limiter when Redis is unreachable
+- [x] Per-provider token bucket in the sender in front of every provider call
+- [x] Burst handling: reject above a limit with 429 and Retry-After; accepted requests are held in the queue and the outbox
 
 Done when a burst above the limit is rejected with 429 and Retry-After, and a spike inside the limit is drained without exceeding any provider's rate.
 

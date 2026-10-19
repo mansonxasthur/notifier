@@ -122,7 +122,7 @@ func newFixture(t *testing.T, sendErr error) *fixture {
 	}
 
 	inbox := postgres.NewInboxStore(db)
-	c, err := inbox.Claim(ctx, id, "sms-a", 5)
+	c, err := inbox.Claim(ctx, id, "sms-a", domain.Claims(5))
 	if err != nil || c.Result != domain.InboxClaimWon {
 		t.Fatalf("claim = %+v, %v", c, err)
 	}
@@ -143,7 +143,7 @@ func newFixture(t *testing.T, sendErr error) *fixture {
 		Policies: map[string]domain.RetryPolicy{"sms-a": retry, "sms-b": retry},
 	}
 	f.attempt = NewAttempt(postgres.NewDeliveryStore(db), inbox, providers{"sms-a": prov, "sms-b": provB},
-		f.checker, f.breaker, routing, slog.New(f.logs))
+		f.checker, f.breaker, nil, routing, slog.New(f.logs))
 	f.attempt.now = func() time.Time { return f.now }
 	f.attempt.jitter = func() float64 { return 0.5 }
 	return f

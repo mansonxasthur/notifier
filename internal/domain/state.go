@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 // DeliveryState is the business state of a delivery: did the user get it?
 type DeliveryState string
 
@@ -82,6 +84,8 @@ const (
 	FailureMessage  FailureClass = "message"
 	FailureProvider FailureClass = "provider"
 	FailureTimeout  FailureClass = "timeout"
+	// FailureNone is no class, for an end that was not a failed attempt, such as EXPIRED. It is stored as NULL.
+	FailureNone FailureClass = ""
 )
 
 // FailureReason is the stored reason a row or delivery ended in a terminal failure.
@@ -156,10 +160,35 @@ type DueInbox struct {
 	Retries int
 }
 
+// DefaultMaxDeferrals is how many times a row may be put back for a provider's rate limit
+// before each further deferral counts as a claim.
+const DefaultMaxDeferrals = 1000
+
+// ClaimLimits bounds how often an inbox row may be claimed.
+type ClaimLimits struct {
+	// MaxClaims is how many claims a row may use before it ends DEAD.
+	MaxClaims int
+	// MaxDeferrals is how many deferrals a row may have without costing a claim.
+	MaxDeferrals int
+}
+
+// Claims returns limits of max claims with the default allowance of free deferrals.
+func Claims(max int) ClaimLimits {
+	return ClaimLimits{MaxClaims: max, MaxDeferrals: DefaultMaxDeferrals}
+}
+
+// Used is how many of a row's claims count against MaxClaims: all of them, except the ones that
+// only deferred the row, up to MaxDeferrals.
+func (l ClaimLimits) Used(claims, deferrals int) int { return claims - min(deferrals, l.MaxDeferrals) }
+
 // StuckInbox is an inbox row left in PROCESSING past its threshold. ClaimCount is the
 // fencing token for the sweep's update.
 type StuckInbox struct {
 	DeliveryID int64
 	Provider   string
 	ClaimCount int
+	// Retries is how many retries the row has spent on its provider.
+	Retries int
+	// ExpiresAt is the delivery's deadline.
+	ExpiresAt time.Time
 }

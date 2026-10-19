@@ -18,8 +18,10 @@ type Provider struct {
 	Timeout time.Duration
 	// Next is the provider after this one on its channel, or empty for the last.
 	Next string
-	// Backoff spaces a requeued row's retry; it is the provider's own, not the relay's.
-	Backoff domain.Backoff
+	// MaxRetries and Backoff are the provider's own retry policy, which a requeued row follows
+	// exactly as it would after a failed send.
+	MaxRetries int
+	Backoff    domain.Backoff
 }
 
 // JanitorConfig tunes the sweeps.
@@ -75,7 +77,7 @@ func (j *Janitor) SweepOutbox(ctx context.Context) {
 // SweepInbox recovers inbox rows stuck in PROCESSING with the same check the sender makes
 // after a timeout. A provider that has the message makes it ACCEPTED. One that does not
 // know it gets the row again. One that cannot say moves the row to the next provider, or
-// ends the delivery UNRESOLVED if there is none.
+// ends the delivery UNRESOLVED if there is none. A row past its deadline is not sent again.
 func (j *Janitor) SweepInbox(ctx context.Context) {
 	for _, p := range j.cfg.Providers {
 		stuck, err := j.inbox.ListStuck(ctx, p.Name, p.Timeout+j.cfg.InboxStuckMargin, inboxSweepLimit)
@@ -90,23 +92,41 @@ func (j *Janitor) SweepInbox(ctx context.Context) {
 }
 
 func (j *Janitor) recover(ctx context.Context, p Provider, s domain.StuckInbox) {
+	// Judged before the provider check, which can take seconds, so a row inside its deadline
+	// when it was picked is not failed for the time the check took.
+	expired := !time.Now().Before(s.ExpiresAt)
+
 	res, err := j.checker.Check(ctx, s.Provider, s.DeliveryID)
 	if err != nil {
 		j.log.Warn("provider check failed", "delivery_id", s.DeliveryID, "provider", s.Provider, "error", err)
 		res = ports.CheckUnknown
 	}
 
+	// Past its deadline a row is never sent again, so "not found" ends it EXPIRED, as the
+	// sender's own check would, and an unknown answer ends it UNRESOLVED, because the provider
+	// may already hold the message. A provider that confirms it holds the message still wins.
 	var ok bool
 	var action string
 	switch {
 	case res == ports.CheckAccepted:
 		action = "accepted"
 		ok, err = j.inbox.Accept(ctx, s)
-	case res == ports.CheckNotFound:
-		// The provider never got it, so the same provider is safe to try again.
+	case expired && res == ports.CheckNotFound:
+		action = "expired"
+		ok, err = j.inbox.Fail(ctx, s.DeliveryID, s.ClaimCount, domain.FailureNone, domain.ReasonExpired)
+	case expired:
+		action = "unresolved"
+		ok, err = j.inbox.Unresolve(ctx, s.DeliveryID, s.ClaimCount, domain.FailureTimeout)
+	case res == ports.CheckNotFound && s.Retries < p.MaxRetries:
+		// The provider never got it, so the same provider is safe to try again. This spends
+		// a retry, so a provider that keeps losing messages is eventually left behind.
 		action = "requeued"
-		next := time.Now().Add(p.Backoff.Delay(s.ClaimCount, jitter()))
+		next := time.Now().Add(p.Backoff.Delay(s.Retries+1, jitter()))
 		ok, err = j.inbox.Requeue(ctx, s, next)
+	case res == ports.CheckNotFound && p.Next == "":
+		// Out of retries on the last provider, and it says it never had the message.
+		action = "failed"
+		ok, err = j.inbox.Fail(ctx, s.DeliveryID, s.ClaimCount, domain.FailureTimeout, domain.ReasonProviderFailed)
 	case p.Next != "":
 		action = "switched"
 		ok, err = j.inbox.Switch(ctx, s.DeliveryID, s.ClaimCount, p.Next, domain.FailureTimeout, time.Now())

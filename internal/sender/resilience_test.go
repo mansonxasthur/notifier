@@ -221,9 +221,7 @@ func TestTimeoutAsksTheProvider(t *testing.T) {
 
 func TestBreakers(t *testing.T) {
 	open := func(f *fixture, provider string) {
-		for range 3 {
-			f.breaker.Failure(provider)
-		}
+		tripBreaker(f.breaker, provider)
 	}
 
 	t.Run("open breaker on the primary: switch without a call or a spent retry", func(t *testing.T) {
@@ -259,12 +257,13 @@ func TestBreakers(t *testing.T) {
 		}
 		// A provider that recovers ends the outage, so the next one is reported again.
 		f.clock.advance(10 * time.Second)
-		if !f.breaker.Allow("sms-b") {
+		probe, ok := f.breaker.Allow("sms-b")
+		if !ok {
 			t.Fatal("probe refused")
 		}
 		f.attempt.outage.Store(true)
 		// The claim is stale, so the inbox write changes nothing; only the breaker matters.
-		if err := f.attempt.settle(context.Background(), attemptRun{c: f.claim}, nil); err != nil {
+		if err := f.attempt.settle(context.Background(), attemptRun{c: f.claim, ticket: probe}, nil); err != nil {
 			t.Fatal(err)
 		}
 		if f.attempt.outage.Load() {
@@ -277,7 +276,7 @@ func TestBreakers(t *testing.T) {
 		for range 5 {
 			f.send(t)
 		}
-		if !f.breaker.Allow("sms-a") {
+		if !f.breaker.can("sms-a") {
 			t.Error("message-level rejections must not open the breaker")
 		}
 
@@ -288,7 +287,7 @@ func TestBreakers(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if g.breaker.Allow("sms-a") {
+		if g.breaker.can("sms-a") {
 			t.Error("three provider failures should open the breaker")
 		}
 	})
@@ -302,4 +301,86 @@ func TestExpiredDeliveryIsNotSent(t *testing.T) {
 	if len(f.prov.calls) != 0 {
 		t.Error("an expired delivery must not be sent")
 	}
+	var noClass bool
+	if err := f.db.Pool().QueryRow(context.Background(), `SELECT failure_class IS NULL FROM inbox WHERE delivery_id = $1`, f.id).Scan(&noClass); err != nil || !noClass {
+		t.Errorf("an expired delivery was never sent, so its failure_class must be NULL (got null=%v, err=%v)", noClass, err)
+	}
+}
+
+// A timeout counts against the breaker only when the lookup does not show the provider took the
+// message. Three timeouts in a row open it when the provider says "not found", and never when it
+// says it holds the message.
+func TestTimeoutsAreBreakerFailuresOnlyIfTheLookupDoesNotAcceptThem(t *testing.T) {
+	again := func(f *fixture) {
+		t.Helper()
+		ctx := context.Background()
+		if _, err := f.db.Pool().Exec(ctx, `UPDATE inbox SET state = 'PROCESSING'`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.db.Pool().Exec(ctx, `UPDATE deliveries SET state = 'PENDING'`); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("the provider holds the message: the breaker stays closed", func(t *testing.T) {
+		f := newFixture(t, errTimeout)
+		f.checker.res = ports.CheckAccepted
+		for range 4 {
+			f.send(t)
+			again(f)
+		}
+		if !f.breaker.can("sms-a") {
+			t.Fatal("timeouts the provider then confirmed opened its breaker")
+		}
+	})
+
+	t.Run("the provider does not hold it: the timeouts open the breaker", func(t *testing.T) {
+		f := newFixture(t, errTimeout)
+		f.checker.res = ports.CheckNotFound
+		for range 3 {
+			f.send(t)
+			again(f)
+		}
+		if f.breaker.can("sms-a") {
+			t.Fatal("three timeouts the provider denied should open the breaker")
+		}
+	})
+
+	t.Run("the lookup cannot say: it counts as a failure", func(t *testing.T) {
+		f := newFixture(t, errTimeout)
+		f.checker.err = errors.New("lookup failed")
+		for range 3 {
+			f.send(t)
+			again(f)
+		}
+		if f.breaker.can("sms-a") {
+			t.Fatal("timeouts with no usable lookup should open the breaker")
+		}
+	})
+
+	t.Run("shutdown during the lookup gives back the probe slot", func(t *testing.T) {
+		f := newFixture(t, errTimeout)
+		tripBreaker(f.breaker, "sms-a")
+		f.clock.advance(10 * time.Second) // half-open
+		f.checker.err = context.Canceled
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := f.attempt.Send(ctx, f.claim); err == nil {
+			t.Fatal("want the cancellation returned")
+		}
+		if !f.breaker.can("sms-a") {
+			t.Fatal("the probe slot leaked when shutdown cut the lookup short")
+		}
+	})
+
+	t.Run("an accepted timeout gives back the probe slot", func(t *testing.T) {
+		f := newFixture(t, errTimeout)
+		tripBreaker(f.breaker, "sms-a")
+		f.clock.advance(10 * time.Second) // half-open
+		f.checker.res = ports.CheckAccepted
+		f.send(t)
+		if !f.breaker.can("sms-a") {
+			t.Fatal("the probe slot stayed taken after a timeout the provider confirmed")
+		}
+	})
 }

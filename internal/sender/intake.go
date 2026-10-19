@@ -26,16 +26,16 @@ type Send func(ctx context.Context, c Claimed) error
 
 // Intake turns queue messages into inbox claims.
 type Intake struct {
-	inbox     ports.InboxStore
-	primary   map[domain.Channel]string
-	maxClaims int
-	send      Send
-	log       *slog.Logger
+	inbox   ports.InboxStore
+	primary map[domain.Channel]string
+	limits  domain.ClaimLimits
+	send    Send
+	log     *slog.Logger
 }
 
-// NewIntake claims a new delivery on its channel's primary provider and at most maxClaims claims per delivery.
-func NewIntake(inbox ports.InboxStore, primary map[domain.Channel]string, maxClaims int, send Send, log *slog.Logger) *Intake {
-	return &Intake{inbox: inbox, primary: primary, maxClaims: maxClaims, send: send, log: log}
+// NewIntake claims a new delivery on its channel's primary provider, within the claim limits.
+func NewIntake(inbox ports.InboxStore, primary map[domain.Channel]string, limits domain.ClaimLimits, send Send, log *slog.Logger) *Intake {
+	return &Intake{inbox: inbox, primary: primary, limits: limits, send: send, log: log}
 }
 
 // Handler returns the queue handler for a channel. The message is acknowledged (a nil
@@ -47,7 +47,7 @@ func (i *Intake) Handler(ch domain.Channel) (ports.Handler, error) {
 		return nil, fmt.Errorf("no primary provider for channel %s", ch)
 	}
 	return func(ctx context.Context, deliveryID int64) error {
-		claim, err := i.inbox.Claim(ctx, deliveryID, provider, i.maxClaims)
+		claim, err := i.inbox.Claim(ctx, deliveryID, provider, i.limits)
 		if err != nil {
 			return fmt.Errorf("claim delivery %d: %w", deliveryID, err)
 		}

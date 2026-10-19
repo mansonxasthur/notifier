@@ -39,6 +39,7 @@ type Attempt struct {
 	providers  Providers
 	checker    ports.ProviderChecker
 	breakers   *Breakers
+	limits     *ProviderLimits
 	routing    Routing
 	log        *slog.Logger
 
@@ -48,12 +49,12 @@ type Attempt struct {
 	outage atomic.Bool
 }
 
-// NewAttempt returns an Attempt.
+// NewAttempt returns an Attempt. limits may be nil, which leaves every provider unlimited.
 func NewAttempt(deliveries ports.DeliveryStore, inbox ports.InboxStore, providers Providers, checker ports.ProviderChecker,
-	breakers *Breakers, routing Routing, log *slog.Logger) *Attempt {
+	breakers *Breakers, limits *ProviderLimits, routing Routing, log *slog.Logger) *Attempt {
 	return &Attempt{
 		deliveries: deliveries, inbox: inbox, providers: providers, checker: checker,
-		breakers: breakers, routing: routing, log: log,
+		breakers: breakers, limits: limits, routing: routing, log: log,
 		now:    time.Now,
 		jitter: rand.Float64, //nolint:gosec // jitter spreads retries, it is not a secret
 	}
@@ -69,6 +70,8 @@ type attemptRun struct {
 	provider ports.Provider
 	// next is the provider after this one, or "" when this is the last.
 	next string
+	// ticket is the breaker's pass for this call; the result is reported with it.
+	ticket Ticket
 }
 
 // Send implements Send. An attempt that gets an answer ends in one log line with the
@@ -101,14 +104,22 @@ func (a *Attempt) Send(ctx context.Context, c Claimed) error {
 	defer cancel()
 
 	if !d.ExpiresAt.IsZero() && !a.now().Before(d.ExpiresAt) {
-		return a.fail(settleCtx, run, "", domain.ReasonExpired)
+		return a.fail(settleCtx, run, domain.FailureNone, domain.ReasonExpired)
 	}
-	if !a.breakers.Allow(c.Provider) {
+	ticket, allowed := a.breakers.Allow(c.Provider)
+	run.ticket = ticket
+	if !allowed {
 		if run.next == "" {
 			return a.noProvider(settleCtx, run)
 		}
 		// An open breaker moves on without spending a retry.
 		return a.switchTo(settleCtx, run, domain.FailureProvider, "breaker_open")
+	}
+	// The token comes after the breaker, so a call the breaker refuses wastes none. A refusal
+	// here gives back the half-open probe slot the breaker just handed out.
+	if ok, wait := a.limits.Take(c.Provider); !ok {
+		a.breakers.Release(c.Provider, ticket)
+		return a.throttle(settleCtx, run, wait, d.ExpiresAt)
 	}
 
 	err = run.provider.Send(ctx, ports.SendRequest{DeliveryID: d.ID, Channel: d.Channel, Contact: d.Contact, Content: d.Content})
@@ -143,6 +154,7 @@ const (
 	outcomeFailed     = "failed"
 	outcomeParked     = "parked"
 	outcomeSkipped    = "skipped"
+	outcomeThrottled  = "throttled"
 	outcomeSwitched   = "switched"
 	outcomeUnresolved = "unresolved"
 )
@@ -161,7 +173,7 @@ func (a *Attempt) settle(ctx context.Context, run attemptRun, sendErr error) err
 	provider := run.c.Provider
 
 	if sendErr == nil {
-		if a.breakers.Success(provider) == Closed {
+		if a.breakers.Success(provider, run.ticket) == Closed {
 			a.outage.Store(false)
 		}
 		return a.complete(settleCtx, run.c, "")
@@ -171,22 +183,21 @@ func (a *Attempt) settle(ctx context.Context, run attemptRun, sendErr error) err
 	if !classified {
 		// Not a statement about the provider, such as shutdown. The row stays PROCESSING
 		// and the janitor decides what happened.
-		a.breakers.Release(provider)
+		a.breakers.Release(provider, run.ticket)
 		return sendErr
 	}
 
 	if class == domain.FailureMessage {
 		// The provider refused this message, not itself: the breaker learns nothing.
-		a.breakers.Release(provider)
+		a.breakers.Release(provider, run.ticket)
 		return a.fail(settleCtx, run, class, domain.ReasonProviderRejected, "error", sendErr)
 	}
 
-	if a.breakers.Failure(provider) == Opened {
-		a.log.Warn("circuit breaker opened", "provider", provider)
-	}
 	if class == domain.FailureTimeout {
+		// The breaker is told after the lookup: a timeout the provider then says it took is not a failure.
 		return a.settleTimeout(ctx, settleCtx, run, sendErr)
 	}
+	a.breakerFailure(run)
 	return a.retryOrMove(settleCtx, run, class, sendErr)
 }
 
@@ -196,21 +207,36 @@ func (a *Attempt) settle(ctx context.Context, run attemptRun, sendErr error) err
 func (a *Attempt) settleTimeout(checkCtx, settleCtx context.Context, run attemptRun, sendErr error) error {
 	res, err := a.checker.Check(checkCtx, run.c.Provider, run.c.DeliveryID)
 	if err != nil && checkCtx.Err() != nil {
+		// Shutdown says nothing about the provider; the janitor makes the same check.
+		a.breakers.Release(run.c.Provider, run.ticket)
 		return checkCtx.Err()
 	}
-	switch {
-	case err == nil && res == ports.CheckAccepted:
+	if err == nil && res == ports.CheckAccepted {
+		// Slow, but the provider took the message: neither a success nor a failure.
+		a.breakers.Release(run.c.Provider, run.ticket)
 		return a.complete(settleCtx, run.c, domain.FailureTimeout, "lookup", "accepted")
-	case err == nil && res == ports.CheckNotFound:
+	}
+	a.breakerFailure(run)
+	if err == nil && res == ports.CheckNotFound {
 		// The provider never got it, so another try on the same provider is safe.
 		return a.retryOrMove(settleCtx, run, domain.FailureTimeout, sendErr)
 	}
 	// No usable answer: the message may or may not be there. Another provider could
 	// duplicate it, which is accepted; the last provider can only leave it unresolved.
 	if run.next == "" {
+		if err == nil {
+			err = fmt.Errorf("the lookup gave no usable answer (%v)", res)
+		}
 		return a.unresolve(settleCtx, run, "lookup_error", err)
 	}
 	return a.switchTo(settleCtx, run, domain.FailureTimeout, "lookup_unusable")
+}
+
+// breakerFailure tells the breaker the call failed on the provider's side.
+func (a *Attempt) breakerFailure(run attemptRun) {
+	if a.breakers.Failure(run.c.Provider, run.ticket) == Opened {
+		a.log.Warn("circuit breaker opened", "provider", run.c.Provider)
+	}
 }
 
 // retryOrMove handles a failure the provider is known not to have taken: retry it while it
@@ -232,6 +258,28 @@ func (a *Attempt) retryOrMove(ctx context.Context, run attemptRun, class domain.
 		return a.switchTo(ctx, run, class, "retries_exhausted", "error", sendErr)
 	}
 	return a.fail(ctx, run, class, domain.ReasonProviderFailed, "error", sendErr)
+}
+
+// throttleSpread spreads the deferred rows of a spike over this window, so they do not all come
+// back at the instant the next token is free.
+const throttleSpread = 250 * time.Millisecond
+
+// throttle puts the row back on the same provider, due when its bucket will have a token, plus
+// jitter, but no later than the delivery's deadline. It is not a failure: no retry is spent, the breaker hears nothing, and the claim does
+// not count towards the cap. The deadline is checked again on the next attempt.
+func (a *Attempt) throttle(ctx context.Context, run attemptRun, wait time.Duration, expiresAt time.Time) error {
+	c := run.c
+	next := a.now().Add(wait + time.Duration(a.jitter()*float64(throttleSpread)))
+	// Never wait past the deadline: the row comes back at it and ends EXPIRED on time.
+	if !expiresAt.IsZero() && next.After(expiresAt) {
+		next = expiresAt
+	}
+	applied, err := a.inbox.Defer(ctx, c.DeliveryID, c.ClaimCount, next)
+	if err != nil {
+		return err
+	}
+	a.logAttempt(c, "", outcomeThrottled, applied, "next_attempt_at", next)
+	return nil
 }
 
 // switchTo moves the row to the channel's next provider, due now, with retries reset.
@@ -290,7 +338,12 @@ func (a *Attempt) logAttempt(c Claimed, class domain.FailureClass, outcome strin
 	attrs := append([]any{"delivery_id", c.DeliveryID, "provider", c.Provider, "claim", c.ClaimCount,
 		"failure_class", string(class), "outcome", outcome}, extra...)
 	level := slog.LevelInfo
-	if outcome != outcomeAccepted && outcome != outcomeSkipped {
+	switch outcome {
+	case outcomeAccepted, outcomeSkipped:
+	case outcomeThrottled:
+		// A spike defers thousands of rows; each is normal, so none is worth a warning.
+		level = slog.LevelDebug
+	default:
 		level = slog.LevelWarn
 	}
 	if !applied {

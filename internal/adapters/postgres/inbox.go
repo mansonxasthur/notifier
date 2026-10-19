@@ -22,12 +22,12 @@ type InboxStore struct {
 func NewInboxStore(db *Pool) *InboxStore { return &InboxStore{db: db} }
 
 const insertInbox = `
-INSERT INTO inbox (delivery_id, state, provider, claim_count)
-VALUES ($1, $2, $3, 1)
+INSERT INTO inbox (delivery_id, state, provider, claim_count, channel)
+SELECT $1, $2, $3, 1, d.channel FROM deliveries d WHERE d.id = $1
 ON CONFLICT (delivery_id) DO NOTHING`
 
 const lockInbox = `
-SELECT state, claim_count, retries, provider, coalesce(next_attempt_at <= now(), true)
+SELECT state, claim_count, deferrals, retries, provider, coalesce(next_attempt_at <= now(), true)
 FROM inbox WHERE delivery_id = $1 FOR UPDATE`
 
 const reclaimInbox = `
@@ -43,7 +43,7 @@ UPDATE deliveries SET state = $2, failure_reason = $4, updated_at = now()
 WHERE id = $1 AND state = $3`
 
 // Claim implements ports.InboxStore.
-func (s *InboxStore) Claim(ctx context.Context, deliveryID int64, provider string, maxClaims int) (domain.InboxClaim, error) {
+func (s *InboxStore) Claim(ctx context.Context, deliveryID int64, provider string, limits domain.ClaimLimits) (domain.InboxClaim, error) {
 	tx, err := s.db.Pool().Begin(ctx)
 	if err != nil {
 		return domain.InboxClaim{}, fmt.Errorf("claim inbox: %w", err)
@@ -56,7 +56,7 @@ func (s *InboxStore) Claim(ctx context.Context, deliveryID int64, provider strin
 	}
 	claim := domain.InboxClaim{Result: domain.InboxClaimWon, ClaimCount: 1, Provider: provider}
 	if tag.RowsAffected() == 0 {
-		claim, err = claimExisting(ctx, tx, deliveryID, maxClaims)
+		claim, err = claimExisting(ctx, tx, deliveryID, limits)
 		if err != nil {
 			return domain.InboxClaim{}, fmt.Errorf("claim inbox: %w", err)
 		}
@@ -69,18 +69,18 @@ func (s *InboxStore) Claim(ctx context.Context, deliveryID int64, provider strin
 
 // claimExisting handles a message whose inbox row already exists. Only a row waiting for a
 // retry that is due can be claimed again; the row lock makes concurrent senders take turns.
-func claimExisting(ctx context.Context, tx pgx.Tx, deliveryID int64, maxClaims int) (domain.InboxClaim, error) {
+func claimExisting(ctx context.Context, tx pgx.Tx, deliveryID int64, limits domain.ClaimLimits) (domain.InboxClaim, error) {
 	var state domain.InboxState
-	var claims, retries int
+	var claims, deferrals, retries int
 	var provider string
 	var due bool
-	if err := tx.QueryRow(ctx, lockInbox, deliveryID).Scan(&state, &claims, &retries, &provider, &due); err != nil {
+	if err := tx.QueryRow(ctx, lockInbox, deliveryID).Scan(&state, &claims, &deferrals, &retries, &provider, &due); err != nil {
 		return domain.InboxClaim{}, err
 	}
 	if state != domain.InboxWaitingRetry || !due {
 		return domain.InboxClaim{Result: domain.InboxClaimDuplicate}, nil
 	}
-	won, err := reclaim(ctx, tx, deliveryID, claims, maxClaims)
+	won, err := reclaim(ctx, tx, deliveryID, limits.Used(claims, deferrals), limits.MaxClaims)
 	if err != nil {
 		return domain.InboxClaim{}, err
 	}
@@ -91,9 +91,10 @@ func claimExisting(ctx context.Context, tx pgx.Tx, deliveryID int64, maxClaims i
 }
 
 // reclaim takes a locked WAITING_RETRY row for a sender, or, if it has used its claims,
-// ends it DEAD and fails its delivery. It reports whether the row was taken.
-func reclaim(ctx context.Context, tx pgx.Tx, deliveryID int64, claims, maxClaims int) (bool, error) {
-	if claims >= maxClaims {
+// ends it DEAD and fails its delivery. used is the claims spent, which leaves out the times the
+// row was only deferred for a rate limit. It reports whether the row was taken.
+func reclaim(ctx context.Context, tx pgx.Tx, deliveryID int64, used, maxClaims int) (bool, error) {
+	if used >= maxClaims {
 		if _, err := tx.Exec(ctx, deadInbox, deliveryID, domain.InboxDead, domain.ReasonMaxClaimsExceeded); err != nil {
 			return false, err
 		}
@@ -106,27 +107,31 @@ func reclaim(ctx context.Context, tx pgx.Tx, deliveryID int64, claims, maxClaims
 }
 
 const dueInbox = `
-SELECT delivery_id, provider, claim_count, retries FROM inbox
-WHERE state = $1 AND next_attempt_at <= now()
+SELECT delivery_id, provider, claim_count, retries, deferrals FROM inbox
+WHERE state = $1 AND channel = $2 AND next_attempt_at <= now()
 ORDER BY next_attempt_at
-LIMIT $2
+LIMIT $3
 FOR UPDATE SKIP LOCKED`
 
 // ClaimDue implements ports.InboxStore.
-func (s *InboxStore) ClaimDue(ctx context.Context, limit int, maxClaims int) ([]domain.DueInbox, error) {
+func (s *InboxStore) ClaimDue(ctx context.Context, channel domain.Channel, limit int, limits domain.ClaimLimits) ([]domain.DueInbox, error) {
 	tx, err := s.db.Pool().Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("claim due inbox: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	rows, err := tx.Query(ctx, dueInbox, domain.InboxWaitingRetry, limit)
+	rows, err := tx.Query(ctx, dueInbox, domain.InboxWaitingRetry, channel, limit)
 	if err != nil {
 		return nil, fmt.Errorf("claim due inbox: %w", err)
 	}
-	locked, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (domain.DueInbox, error) {
-		var d domain.DueInbox
-		err := r.Scan(&d.DeliveryID, &d.Provider, &d.ClaimCount, &d.Retries)
+	type lockedRow struct {
+		domain.DueInbox
+		deferrals int
+	}
+	locked, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (lockedRow, error) {
+		var d lockedRow
+		err := r.Scan(&d.DeliveryID, &d.Provider, &d.ClaimCount, &d.Retries, &d.deferrals)
 		return d, err
 	})
 	if err != nil {
@@ -135,13 +140,13 @@ func (s *InboxStore) ClaimDue(ctx context.Context, limit int, maxClaims int) ([]
 
 	claimed := make([]domain.DueInbox, 0, len(locked))
 	for _, d := range locked {
-		won, err := reclaim(ctx, tx, d.DeliveryID, d.ClaimCount, maxClaims)
+		won, err := reclaim(ctx, tx, d.DeliveryID, limits.Used(d.ClaimCount, d.deferrals), limits.MaxClaims)
 		if err != nil {
 			return nil, fmt.Errorf("claim due inbox: %w", err)
 		}
 		if won {
 			d.ClaimCount++
-			claimed = append(claimed, d)
+			claimed = append(claimed, d.DueInbox)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -151,9 +156,10 @@ func (s *InboxStore) ClaimDue(ctx context.Context, limit int, maxClaims int) ([]
 }
 
 const listStuckInbox = `
-SELECT delivery_id, provider, claim_count FROM inbox
-WHERE provider = $1 AND state = $2 AND last_try < now() - make_interval(secs => $3)
-ORDER BY last_try
+SELECT i.delivery_id, i.provider, i.claim_count, i.retries, d.expires_at
+FROM inbox i JOIN deliveries d ON d.id = i.delivery_id
+WHERE i.provider = $1 AND i.state = $2 AND i.last_try < now() - make_interval(secs => $3)
+ORDER BY i.last_try
 LIMIT $4`
 
 // ListStuck implements ports.InboxStore.
@@ -164,7 +170,7 @@ func (s *InboxStore) ListStuck(ctx context.Context, provider string, olderThan t
 	}
 	stuck, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (domain.StuckInbox, error) {
 		var s domain.StuckInbox
-		err := r.Scan(&s.DeliveryID, &s.Provider, &s.ClaimCount)
+		err := r.Scan(&s.DeliveryID, &s.Provider, &s.ClaimCount, &s.Retries, &s.ExpiresAt)
 		return s, err
 	})
 	if err != nil {
@@ -174,13 +180,13 @@ func (s *InboxStore) ListStuck(ctx context.Context, provider string, olderThan t
 }
 
 const requeueInbox = `
-UPDATE inbox SET state = $4, next_attempt_at = $3, last_try = now()
-WHERE delivery_id = $1 AND state = $5 AND claim_count = $2`
+UPDATE inbox SET state = $4, next_attempt_at = $3, retries = retries + 1, last_try = now()
+WHERE delivery_id = $1 AND state = $5 AND claim_count = $2 AND retries = $6`
 
 // Requeue implements ports.InboxStore.
 func (s *InboxStore) Requeue(ctx context.Context, st domain.StuckInbox, next time.Time) (bool, error) {
 	tag, err := s.db.Pool().Exec(ctx, requeueInbox, st.DeliveryID, st.ClaimCount, next,
-		domain.InboxWaitingRetry, domain.InboxProcessing)
+		domain.InboxWaitingRetry, domain.InboxProcessing, st.Retries)
 	if err != nil {
 		return false, fmt.Errorf("requeue inbox: %w", err)
 	}
@@ -228,7 +234,7 @@ func scanApplied(err error, applied bool, what string) (bool, error) {
 
 const failInbox = `
 WITH dead AS (
-  UPDATE inbox SET state = $3, failure_class = $5, failure_reason = $6, last_try = now()
+  UPDATE inbox SET state = $3, failure_class = NULLIF($5::text, ''), failure_reason = $6, last_try = now()
   WHERE delivery_id = $1 AND state = $4 AND claim_count = $2
   RETURNING delivery_id
 ), failed AS (
@@ -255,6 +261,20 @@ func (s *InboxStore) Park(ctx context.Context, deliveryID int64, claimCount int,
 		domain.InboxWaitingRetry, domain.InboxProcessing, class, next)
 	if err != nil {
 		return false, fmt.Errorf("park inbox: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+const deferInbox = `
+UPDATE inbox SET state = $3, deferrals = deferrals + 1, next_attempt_at = $5, last_try = now()
+WHERE delivery_id = $1 AND state = $4 AND claim_count = $2`
+
+// Defer implements ports.InboxStore.
+func (s *InboxStore) Defer(ctx context.Context, deliveryID int64, claimCount int, next time.Time) (bool, error) {
+	tag, err := s.db.Pool().Exec(ctx, deferInbox, deliveryID, claimCount,
+		domain.InboxWaitingRetry, domain.InboxProcessing, next)
+	if err != nil {
+		return false, fmt.Errorf("defer inbox: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
 }

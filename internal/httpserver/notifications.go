@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/mansonxasthur/notifier/internal/httpserver/requests"
@@ -22,6 +23,7 @@ const (
 	codeUnknownType        = "UNKNOWN_TYPE"
 	codeExpiredDeadline    = "EXPIRED_DEADLINE"
 	codeInvalidIdempotency = "INVALID_IDEMPOTENCY_KEY"
+	codeRateLimited        = "RATE_LIMITED"
 	codeInternal           = "INTERNAL"
 )
 
@@ -45,6 +47,8 @@ type NotificationsOptions struct {
 	// APIKey is the key producers must send in X-API-KEY.
 	APIKey string
 	Policy requests.Policy
+	// Limiter is the global intake limit, charged in deliveries.
+	Limiter ports.Limiter
 	// MaxBodyBytes caps the request body.
 	MaxBodyBytes int64
 	// Now is the clock; it defaults to time.Now.
@@ -56,6 +60,9 @@ type NotificationsOptions struct {
 func RegisterNotifications(mux *http.ServeMux, o NotificationsOptions) error {
 	if o.APIKey == "" {
 		return errors.New("register notifications: API key is empty")
+	}
+	if o.Limiter == nil {
+		return errors.New("register notifications: limiter is nil, which would leave intake unlimited")
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -98,6 +105,13 @@ func (o NotificationsOptions) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Charged after validation, so only the deliveries that would be stored count, and before
+	// any write, so a refused request leaves nothing behind. All or nothing: a request is
+	// never partly accepted.
+	if !o.admit(w, r, len(v.Notification.Deliveries)) {
+		return
+	}
+
 	res, err := o.Store.Create(r.Context(), v.Notification)
 	if err != nil {
 		o.Log.ErrorContext(r.Context(), "create notification", "error", err)
@@ -111,6 +125,33 @@ func (o NotificationsOptions) create(w http.ResponseWriter, r *http.Request) {
 		"notification_id", v.Notification.ID, "type", req.Type,
 		"accepted", resp.Accepted, "duplicates", resp.Duplicates, "rejected", len(resp.Rejected))
 	writeJSON(w, http.StatusAccepted, resp)
+}
+
+// admit charges n deliveries to the global limit. It writes the response itself and returns
+// false when the request is refused, or when the limiter could not decide.
+func (o NotificationsOptions) admit(w http.ResponseWriter, r *http.Request, n int) bool {
+	d, err := o.Limiter.Allow(r.Context(), n)
+	if err != nil {
+		// The fallback only fails when the caller's own context ended, so nobody is likely
+		// waiting; a status is still written, because net/http would send an empty 200.
+		if r.Context().Err() == nil {
+			o.Log.ErrorContext(r.Context(), "rate limiter failed", "error", err)
+		}
+		writeError(w, http.StatusInternalServerError, codeInternal)
+		return false
+	}
+	if d.Allowed {
+		return true
+	}
+	w.Header().Set("Retry-After", retryAfterSeconds(d.RetryAfter))
+	writeError(w, http.StatusTooManyRequests, codeRateLimited)
+	return false
+}
+
+// retryAfterSeconds renders a wait as whole seconds, rounded up and never below one, because
+// Retry-After has no finer unit and "0" would invite an immediate retry.
+func retryAfterSeconds(wait time.Duration) string {
+	return strconv.FormatInt(max(1, int64((wait+time.Second-1)/time.Second)), 10)
 }
 
 // decodeRequest reads one JSON request from the body. It writes the error response itself

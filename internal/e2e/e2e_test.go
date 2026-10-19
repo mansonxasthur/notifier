@@ -19,6 +19,7 @@ import (
 	"github.com/mansonxasthur/notifier/internal/adapters/provider"
 	"github.com/mansonxasthur/notifier/internal/adapters/rabbitmq"
 	"github.com/mansonxasthur/notifier/internal/adapters/rabbitmq/rmqtest"
+	"github.com/mansonxasthur/notifier/internal/adapters/ratelimit"
 	"github.com/mansonxasthur/notifier/internal/adapters/webhookauth"
 	"github.com/mansonxasthur/notifier/internal/config"
 	"github.com/mansonxasthur/notifier/internal/domain"
@@ -63,6 +64,13 @@ var client = &http.Client{Timeout: 10 * time.Second}
 
 func do(t *testing.T, method, url string, body []byte, header ...string) (int, []byte) {
 	t.Helper()
+	status, _, resp := doResp(t, method, url, body, header...)
+	return status, resp
+}
+
+// doResp is do, and also returns the response headers.
+func doResp(t *testing.T, method, url string, body []byte, header ...string) (int, http.Header, []byte) {
+	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), method, url, bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +85,7 @@ func do(t *testing.T, method, url string, body []byte, header ...string) (int, [
 	defer func() { _ = resp.Body.Close() }()
 	var buf bytes.Buffer
 	_, _ = buf.ReadFrom(resp.Body)
-	return resp.StatusCode, buf.Bytes()
+	return resp.StatusCode, resp.Header, buf.Bytes()
 }
 
 // stack is every component, wired as the three entry points and the simulator wire them.
@@ -87,7 +95,9 @@ type stack struct {
 	simURL string
 }
 
-func newStack(t *testing.T) *stack {
+// newStack wires the whole stack from the shipped configuration. Each tune changes that
+// configuration before anything is built from it.
+func newStack(t *testing.T, tune ...func(*config.Config)) *stack {
 	t.Helper()
 	ctx := context.Background()
 
@@ -111,6 +121,9 @@ func newStack(t *testing.T) *stack {
 	// The breaker has its own tests. Here it must not open, or a run of failures would change
 	// which provider a delivery uses and the oracle below could not predict it.
 	cfg.Sender.Breaker.FailureThreshold = 1_000_000
+	for _, f := range tune {
+		f(cfg)
+	}
 
 	db := postgres.New(pgtest.NewMigratedDB(t))
 	if err := db.Start(ctx); err != nil {
@@ -131,6 +144,7 @@ func newStack(t *testing.T) *stack {
 	if err := httpserver.RegisterNotifications(mux, httpserver.NotificationsOptions{
 		Log: quiet, Store: postgres.NewNotificationStore(db, cfg.Accept.ChunkSize), APIKey: "k",
 		Policy: requests.Policy{BatchLimit: cfg.BatchLimit, Expiry: expiry}, MaxBodyBytes: cfg.Accept.MaxBodyBytes,
+		Limiter: ratelimit.NewLocal(cfg.Limits.Global.Policy(), time.Now),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -164,26 +178,22 @@ func newStack(t *testing.T) *stack {
 	providers := provider.NewRegistry(cfg, nil)
 	attempt := sender.NewAttempt(postgres.NewDeliveryStore(db), inbox, providers, providers,
 		sender.NewBreakers(cfg.Sender.Breaker.Policy(), time.Now),
+		sender.NewProviderLimits(cfg.ProviderRateLimits(), time.Now),
 		sender.Routing{Order: cfg.ProviderOrder(), Policies: cfg.ProviderRetryPolicies()}, quiet)
-	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.MaxClaims, attempt.Send, quiet)
-	scan := sender.NewScan(inbox, attempt.Send, cfg.Sender.PollInterval, cfg.Sender.ScanBatch, cfg.Sender.MaxClaims, quiet)
+	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.ClaimLimits(), attempt.Send, quiet)
+	scan := sender.NewScan(inbox, attempt.Send, cfg.Sender.PollInterval, cfg.Sender.ScanBatch, cfg.Sender.ClaimLimits(), quiet)
 	start(t, sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, quiet), intake, scan))
 
 	return &stack{db: db, apiURL: apiURL, simURL: simURL}
 }
 
+const defaultKey = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+
 // submit sends one notification with `recipients` recipients on sms and email, and returns
 // how many deliveries were accepted.
 func (s *stack) submit(t *testing.T) int {
 	t.Helper()
-	var rs []string
-	for i := range recipients {
-		rs = append(rs, fmt.Sprintf(`{"recipient_id":"u_%03d","channels":{"sms":"+2010%08d","email":"u%03d@example.com"}}`, i, i, i))
-	}
-	body := fmt.Sprintf(`{"idempotency_key":"7c9e6679-7425-40de-944b-e07fc1f90ae7","type":"match_alert",
-		"content":{"sms":{"text":"مباراة الهلال والنصر"},"email":{"template_id":"match","variables":{"team":"الهلال"}}},
-		"recipients":[%s]}`, strings.Join(rs, ","))
-	status, resp := do(t, http.MethodPost, s.apiURL+"/v1/notifications", []byte(body), "X-API-KEY", "k", "Content-Type", "application/json")
+	status, _, resp := s.post(t, defaultKey)
 	if status != http.StatusAccepted {
 		t.Fatalf("submit: %d %s", status, resp)
 	}
@@ -196,8 +206,21 @@ func (s *stack) submit(t *testing.T) int {
 	return out.Accepted
 }
 
-// decisions reads what the simulator decided, by delivery id and then provider.
-func (s *stack) decisions(t *testing.T) map[int64]map[string]domain.Scenario {
+// post sends the notification of submit under the given idempotency key and returns the raw answer.
+func (s *stack) post(t *testing.T, key string) (int, http.Header, []byte) {
+	t.Helper()
+	var rs []string
+	for i := range recipients {
+		rs = append(rs, fmt.Sprintf(`{"recipient_id":"u_%03d","channels":{"sms":"+2010%08d","email":"u%03d@example.com"}}`, i, i, i))
+	}
+	body := fmt.Sprintf(`{"idempotency_key":%q,"type":"match_alert",
+		"content":{"sms":{"text":"مباراة الهلال والنصر"},"email":{"template_id":"match","variables":{"team":"الهلال"}}},
+		"recipients":[%s]}`, key, strings.Join(rs, ","))
+	return doResp(t, http.MethodPost, s.apiURL+"/v1/notifications", []byte(body), "X-API-KEY", "k", "Content-Type", "application/json")
+}
+
+// entries reads the simulator's record of every delivery it received, at each provider.
+func (s *stack) entries(t *testing.T) []simprovider.Entry {
 	t.Helper()
 	status, body := do(t, http.MethodGet, s.simURL+"/scenarios", nil)
 	if status != http.StatusOK {
@@ -209,8 +232,14 @@ func (s *stack) decisions(t *testing.T) map[int64]map[string]domain.Scenario {
 	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatal(err)
 	}
+	return out.Entries
+}
+
+// decisions reads what the simulator decided, by delivery id and then provider.
+func (s *stack) decisions(t *testing.T) map[int64]map[string]domain.Scenario {
+	t.Helper()
 	m := map[int64]map[string]domain.Scenario{}
-	for _, e := range out.Entries {
+	for _, e := range s.entries(t) {
 		if m[e.DeliveryID] == nil {
 			m[e.DeliveryID] = map[string]domain.Scenario{}
 		}

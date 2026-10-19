@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -14,8 +15,9 @@ import (
 
 // Client is a lifecycle component around a Redis client.
 type Client struct {
-	url    string
-	client *goredis.Client
+	url string
+	// client is set by Start and read by request goroutines, so it is atomic.
+	client atomic.Pointer[goredis.Client]
 }
 
 func New(url string) *Client { return &Client{url: url} }
@@ -35,23 +37,26 @@ func (c *Client) Start(ctx context.Context) error {
 		_ = client.Close()
 		return err
 	}
-	c.client = client
+	c.client.Store(client)
 	return nil
 }
 
 func (c *Client) Stop(context.Context) error {
-	if c.client == nil {
+	client := c.client.Load()
+	if client == nil {
 		return nil
 	}
-	return c.client.Close()
+	return client.Close()
 }
 
 func (c *Client) Ping(ctx context.Context) error {
-	if c.client == nil {
+	client := c.client.Load()
+	if client == nil {
 		return errors.New("not connected")
 	}
-	return c.client.Ping(ctx).Err()
+	return client.Ping(ctx).Err()
 }
 
-// Client exposes the underlying client to the rate limiter added in Phase 6.
-func (c *Client) Client() *goredis.Client { return c.client }
+// Client exposes the underlying client, which is nil until Start has run. Code that is built
+// before the lifecycle starts uses Scripter instead.
+func (c *Client) Client() *goredis.Client { return c.client.Load() }

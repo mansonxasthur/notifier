@@ -44,6 +44,22 @@ func TestShippedConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestShippedLimits(t *testing.T) {
+	c := loadShipped(t)
+	if got := c.Limits.Global.Policy(); got.Rate != 500000 || !got.Fits(c.BatchLimit*len(domain.Channels())) {
+		t.Errorf("global limit = %+v; want 500000/s and room for the largest request", got)
+	}
+	limits := c.ProviderRateLimits()
+	for name := range c.ProvidersByName() {
+		if limits[name].Validate() != nil {
+			t.Errorf("provider %s has no usable rate limit: %+v", name, limits[name])
+		}
+	}
+	if len(limits) != 6 {
+		t.Errorf("rate limits for %d providers, want 6", len(limits))
+	}
+}
+
 func TestEnvOverrides(t *testing.T) {
 	env := map[string]string{
 		"DATABASE_URL": "postgres://db",
@@ -224,6 +240,22 @@ func TestValidateRejects(t *testing.T) {
 		}, "more than one channel"},
 		{"slow delay not below timeout", func(c *Config) { c.SimProvider.SlowDelay = 2 * time.Second }, "slow_delay must be below"},
 		{"timeout delay not above timeout", func(c *Config) { c.SimProvider.TimeoutDelay = time.Second }, "timeout_delay must exceed"},
+		{"global rate zero", func(c *Config) { c.Limits.Global.Rate = 0 }, "limits.global"},
+		{"global burst zero", func(c *Config) { c.Limits.Global.Burst = 0 }, "limits.global"},
+		{"global burst below largest request", func(c *Config) {
+			c.Limits.Global.Burst = c.BatchLimit*len(domain.Channels()) - 1
+		}, "limits.global.burst must be at least"},
+		{"provider rate zero", func(c *Config) {
+			cc := email(c)
+			cc.Providers[0].RateLimit.Rate = 0
+			setEmail(c, cc)
+		}, "rate_limit"},
+		{"provider burst zero", func(c *Config) {
+			cc := email(c)
+			cc.Providers[1].RateLimit.Burst = 0
+			setEmail(c, cc)
+		}, "rate_limit"},
+		{"sender deferrals zero", func(c *Config) { c.Sender.MaxDeferrals = 0 }, "sender.max_deferrals"},
 		{"sender claims zero", func(c *Config) { c.Sender.MaxClaims = 0 }, "sender.max_claims"},
 	}
 	for _, tt := range tests {

@@ -13,6 +13,8 @@ import (
 
 	"github.com/mansonxasthur/notifier/internal/adapters/postgres"
 	"github.com/mansonxasthur/notifier/internal/adapters/postgres/pgtest"
+	"github.com/mansonxasthur/notifier/internal/adapters/ratelimit"
+	"github.com/mansonxasthur/notifier/internal/domain"
 	"github.com/mansonxasthur/notifier/internal/httpserver"
 	"github.com/mansonxasthur/notifier/internal/httpserver/requests"
 )
@@ -43,6 +45,7 @@ func TestAcceptBatchEndToEnd(t *testing.T) {
 			Expiry:     map[string]time.Duration{"match_alert": 2 * time.Hour},
 		},
 		MaxBodyBytes: 4 << 20,
+		Limiter:      ratelimit.NewLocal(domain.BucketPolicy{Rate: 1000, Burst: 100000}, time.Now),
 	})
 	if err != nil {
 		t.Fatal(err)

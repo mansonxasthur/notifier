@@ -56,7 +56,7 @@ const (
 func claimed(t *testing.T, db *postgres.Pool) (*postgres.InboxStore, int64, int) {
 	t.Helper()
 	store, id := postgres.NewInboxStore(db), deliveryID(t, db)
-	c, err := store.Claim(context.Background(), id, "sms-a", 5)
+	c, err := store.Claim(context.Background(), id, "sms-a", domain.Claims(5))
 	if err != nil || c.Result != domain.InboxClaimWon {
 		t.Fatalf("claim = %+v, %v", c, err)
 	}
@@ -168,14 +168,14 @@ func TestInboxPark(t *testing.T) {
 	}
 
 	// A redelivered message cannot take the row before it is due: the scan owns the retry.
-	if c, err := store.Claim(ctx, id, "sms-a", 5); err != nil || c.Result != domain.InboxClaimDuplicate {
+	if c, err := store.Claim(ctx, id, "sms-a", domain.Claims(5)); err != nil || c.Result != domain.InboxClaimDuplicate {
 		t.Errorf("claim before due = %+v, %v; want duplicate", c, err)
 	}
 	if _, err := db.Pool().Exec(ctx, `UPDATE inbox SET next_attempt_at = now() - interval '1 second'`); err != nil {
 		t.Fatal(err)
 	}
 	// Once due, the parked row can be claimed again, and the new claim has a new fencing token.
-	c, err := store.Claim(ctx, id, "sms-a", 5)
+	c, err := store.Claim(ctx, id, "sms-a", domain.Claims(5))
 	if err != nil || c.Result != domain.InboxClaimWon || c.ClaimCount != n+1 {
 		t.Errorf("reclaim = %+v, %v; want won with claim_count %d", c, err, n+1)
 	}
