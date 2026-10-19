@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
@@ -20,14 +19,16 @@ var _ ports.Publisher = (*Publisher)(nil)
 type Publisher struct {
 	conn           *Conn
 	confirmTimeout time.Duration
+	messageSize    int
 
 	mu sync.Mutex
 	ch *amqp.Channel
 }
 
-// NewPublisher waits at most confirmTimeout for the broker to confirm a batch.
-func NewPublisher(conn *Conn, confirmTimeout time.Duration) *Publisher {
-	return &Publisher{conn: conn, confirmTimeout: confirmTimeout}
+// NewPublisher waits at most confirmTimeout for the broker to confirm a batch, and puts at
+// most messageSize IDs in a message.
+func NewPublisher(conn *Conn, confirmTimeout time.Duration, messageSize int) *Publisher {
+	return &Publisher{conn: conn, confirmTimeout: confirmTimeout, messageSize: max(messageSize, 1)}
 }
 
 // channel returns the confirm-mode channel, opening one if there is none. The caller holds p.mu.
@@ -70,36 +71,42 @@ func (p *Publisher) Publish(ctx context.Context, c domain.Channel, ids []int64) 
 		return confirmed, err
 	}
 
-	pending := make([]*amqp.DeferredConfirmation, len(ids))
+	// Each message is confirmed as a whole, so its IDs share one outcome.
+	type sent struct {
+		first, end int
+		dc         *amqp.DeferredConfirmation
+	}
+	var pending []sent
 	var errs []error
-	for i, id := range ids {
+	for first := 0; first < len(ids); first += p.messageSize {
+		end := min(first+p.messageSize, len(ids))
 		dc, err := ch.PublishWithDeferredConfirmWithContext(ctx, "", QueueName(c), false, false, amqp.Publishing{
 			DeliveryMode: amqp.Persistent,
 			ContentType:  "text/plain",
-			Body:         []byte(strconv.FormatInt(id, 10)),
+			Body:         encodeIDs(ids[first:end]),
 			Headers:      amqp.Table{EnqueuedHeader: time.Now().UnixNano()},
 		})
 		if err != nil {
-			errs = append(errs, fmt.Errorf("publish %d: %w", id, err))
+			errs = append(errs, fmt.Errorf("publish %d ids: %w", end-first, err))
 			break
 		}
-		pending[i] = dc
+		pending = append(pending, sent{first, end, dc})
 	}
 
 	waitCtx, cancel := context.WithTimeout(ctx, p.confirmTimeout)
 	defer cancel()
-	for i, dc := range pending {
-		if dc == nil {
-			continue
-		}
-		acked, err := dc.WaitContext(waitCtx)
+	for _, m := range pending {
+		acked, err := m.dc.WaitContext(waitCtx)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("confirm %d: %w", ids[i], err))
+			errs = append(errs, fmt.Errorf("confirm %d ids: %w", m.end-m.first, err))
 			break
 		}
-		confirmed[i] = acked
 		if !acked {
-			errs = append(errs, fmt.Errorf("broker nacked %d", ids[i]))
+			errs = append(errs, fmt.Errorf("broker nacked a message of %d ids", m.end-m.first))
+			continue
+		}
+		for i := m.first; i < m.end; i++ {
+			confirmed[i] = true
 		}
 	}
 

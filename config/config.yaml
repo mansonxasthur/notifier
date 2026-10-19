@@ -128,6 +128,10 @@ channels:
 relay:
   poll_interval: 100ms
   batch_size: 2000
+  # Delivery ids in one queue message, so the broker carries about 1/message_size of the
+  # deliveries per second as messages. 1 publishes the single-id shape older senders read: deploy
+  # senders before raising it, and lower it again before rolling senders back.
+  message_size: 100
   # Claim-and-publish loops per relay process; SKIP LOCKED keeps them off each other's rows.
   workers: 8
   max_attempts: 10
@@ -144,9 +148,10 @@ sender:
   # How often the sender scans for retries that have become due.
   poll_interval: 200ms
   max_claims: 20
-  # Unacknowledged messages a sender holds per queue. Only messages in flight together can share
-  # a database batch, so keep this a few times batch_size.
-  prefetch: 200
+  # Unacknowledged messages a sender holds per queue. A message carries up to relay.message_size
+  # ids and all of them are handled at once, so ids in flight per queue is about prefetch times
+  # message_size. Keep that a few times batch_size so database batches fill.
+  prefetch: 4
   # The sender groups the claims, loads and outcome writes of messages in flight together into
   # one database call (one commit) of up to batch_size, written linger after the first at the
   # latest. linger is the latency each database stage adds when the sender is not busy.

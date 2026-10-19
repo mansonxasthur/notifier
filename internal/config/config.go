@@ -170,6 +170,8 @@ type Backoff struct {
 type Relay struct {
 	PollInterval time.Duration `yaml:"poll_interval"`
 	BatchSize    int           `yaml:"batch_size"`
+	// MessageSize is the most delivery ids in one queue message.
+	MessageSize int `yaml:"message_size"`
 	// Workers is how many claim-and-publish loops one relay runs.
 	Workers     int `yaml:"workers"`
 	MaxAttempts int `yaml:"max_attempts"`
@@ -189,10 +191,11 @@ type Janitor struct {
 type Sender struct {
 	PollInterval time.Duration `yaml:"poll_interval"`
 	MaxClaims    int           `yaml:"max_claims"`
-	// Prefetch is how many unacknowledged messages a sender holds per queue.
+	// Prefetch is how many unacknowledged messages a sender holds per queue; each carries up to
+	// relay.message_size ids.
 	Prefetch int `yaml:"prefetch"`
 	// BatchSize is the most claims, loads or outcome writes the sender groups into one database
-	// call. Only messages in flight together can share a batch, so Prefetch should be a few times it.
+	// call. Only messages in flight together can share a batch, so Prefetch times relay.message_size should be a few times it.
 	BatchSize int `yaml:"batch_size"`
 	// Linger is how long a batch waits for more items before it is written, the latency one
 	// database stage adds when the sender is not busy.
@@ -565,6 +568,9 @@ func (r Relay) validate() []error {
 	}
 	if r.BatchSize <= 0 {
 		bad("relay.batch_size must be positive")
+	}
+	if r.MessageSize <= 0 {
+		bad("relay.message_size must be positive")
 	}
 	if r.Workers <= 0 {
 		bad("relay.workers must be positive")

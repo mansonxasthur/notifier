@@ -153,7 +153,7 @@ RabbitMQ, with one durable queue per channel, carries the work. The relay publis
 
 Details settled for Phase 3:
 
-- **Queue names and message.** The default exchange is used, and each queue is named after its channel only (`email`, `sms`, `whatsapp`). The message body holds only the `delivery_id`, as decimal text.
+- **Queue names and message.** The default exchange is used, and each queue is named after its channel only (`email`, `sms`, `whatsapp`). The message body holds only delivery ids, as decimal text (one id per message until queue batching, see "Queue batching").
 - **`next_attempt_at`.** It is empty by default, which means due now. It is set only when a retry is scheduled (a failed publish or a janitor reclaim) and is never carried in the message.
 - **Release delay.** `delay = min(max, initial * multiplier^(retries-1))`, jittered by plus or minus the configured `jitter` fraction, from the relay's `backoff` settings. One helper serves both the failed-publish release and the janitor reclaim.
 - **Attempt cap.** A claim that would take `retries` above `relay.max_attempts` ends the row `DEAD` with the reason `MAX_ATTEMPTS_EXCEEDED`. A janitor reclaim counts against the cap, because it follows a claim.
@@ -376,6 +376,21 @@ Two other designs were considered for the queue and dropped in favor of RabbitMQ
 - **Pickup delay.** The relay polls the outbox, so a first attempt waits for the next poll. A short poll interval keeps it small.
 - **A throughput ceiling.** One RabbitMQ node cannot carry 500K messages per second, and the document names Kafka or sharded queues as the way past that.
 - **Retries stay in Postgres.** RabbitMQ has no per-message delay without a plugin, so retry timing lives in the inbox, with a sender scan for due rows.
+
+## Queue batching
+
+A queue message carries a batch of delivery ids for one channel, so 500K deliveries/s is about 5K messages/s at 100 ids a message instead of 500K. This removes the need to partition the broker rather than scaling it.
+
+- **Body.** Decimal ids joined by commas (`123,124,125`), `text/plain`. One id is byte-identical to the old body, so the consumer needs no format detection and messages in flight during a deploy parse unchanged. A body with a non-numeric token is rejected without requeue, as before.
+- **Size.** `relay.message_size` (default 100) is the most ids in one message. The publisher splits a channel's claimed rows into messages of that size, with one confirm and one `enqueued_at_ns` header per message.
+- **No relay linger.** The relay already claims up to `relay.batch_size` rows and groups them by channel, so a batch fills from the claim. A partial batch is published at once: holding it back would only add latency. The added wait is zero and the bound stays `relay.poll_interval`.
+- **Confirms and release.** An id is confirmed only if its message was. A nack or timeout leaves exactly that message's ids unconfirmed; the relay releases those rows and `MarkPublished` stays per row.
+- **Handler and ack.** The handler receives all ids of a message; a nil return acks the message. Ids run concurrently, so the sender's claim batches fill from one message.
+- **Partial failure.** A handler that cannot finish returns the ids that failed. The consumer republishes only those as a new message and then acks the original; if that republish is not confirmed it requeues the original. Redelivery of finished ids is harmless because the inbox claim is idempotent: an id already claimed is a duplicate and is dropped.
+- **Poison ids.** A delivery id with no delivery row is logged and dropped instead of requeued, so it cannot loop its batch. Transient failures (a claim batch that errors) are retried, and succeed when the cause clears.
+- **Queue wait.** Recorded once per id in a message, so the histograms stay comparable with the single-id results.
+- **Rollout.** Deploy senders first, then relays: an old sender drops a multi-id body as malformed. Roll back relays first. `relay.message_size: 1` publishes the old shape.
+- **Cost.** Redelivery is coarser (a whole message), and the ids of a message wait for the slowest in it before the ack.
 
 ## Out of scope and future work
 

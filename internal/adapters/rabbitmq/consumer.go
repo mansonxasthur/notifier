@@ -2,8 +2,9 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"log/slog"
-	"strconv"
+	"slices"
 	"sync"
 	"time"
 
@@ -31,6 +32,8 @@ type Consumer struct {
 	prefetch int
 	log      *slog.Logger
 	rec      ports.Recorder
+	// republish carries the failed IDs of a partly handled message to a new message.
+	republish ports.Publisher
 }
 
 // NewConsumer holds at most prefetch unacknowledged messages per queue.
@@ -41,6 +44,13 @@ func NewConsumer(conn *Conn, prefetch int, log *slog.Logger) *Consumer {
 // WithRecorder makes the consumer report how long each message waited in its queue.
 func (c *Consumer) WithRecorder(r ports.Recorder) *Consumer {
 	c.rec = r
+	return c
+}
+
+// WithRepublisher makes a message the handler only partly finished give its unfinished IDs
+// to a new message instead of going back whole. Without it the whole message is requeued.
+func (c *Consumer) WithRepublisher(p ports.Publisher) *Consumer {
+	c.republish = p
 	return c
 }
 
@@ -99,32 +109,63 @@ func (c *Consumer) consumeOnce(ctx context.Context, ch domain.Channel, h ports.H
 }
 
 func (c *Consumer) handle(ctx context.Context, ch domain.Channel, h ports.Handler, msg amqp.Delivery) {
-	id, err := strconv.ParseInt(string(msg.Body), 10, 64)
+	ids, err := decodeIDs(msg.Body)
 	if err != nil {
-		// A body that is not a delivery ID can never succeed; requeueing would loop forever.
+		// A body that is not delivery IDs can never succeed; requeueing would loop forever.
 		c.log.Error("dropping malformed message", "channel", ch, "error", err)
 		_ = msg.Reject(false)
 		return
 	}
-	c.recordWait(ch, msg)
+	c.recordWait(ch, msg, len(ids))
 	// In-flight messages finish when the consumer stops, so the handler is not cancelled with it.
 	hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handlerTimeout)
 	defer cancel()
-	if err := h(hctx, id); err != nil {
-		c.log.Warn("handler failed, requeueing", "channel", ch, "delivery_id", id, "error", err)
-		select {
-		case <-ctx.Done():
-		case <-time.After(requeueDelay):
-		}
-		_ = msg.Nack(false, true)
+	err = h(hctx, ids)
+	if err == nil {
+		_ = msg.Ack(false)
 		return
 	}
-	_ = msg.Ack(false)
+	if c.splitFailed(ctx, ch, ids, err) {
+		_ = msg.Ack(false)
+		return
+	}
+	c.log.Warn("handler failed, requeueing", "channel", ch, "ids", len(ids), "error", err)
+	select {
+	case <-ctx.Done():
+	case <-time.After(requeueDelay):
+	}
+	_ = msg.Nack(false, true)
 }
 
-// recordWait reports the time since the publisher sent msg. A redelivered message is skipped:
+// splitFailed moves the IDs a handler reported as failed to a new message and returns true
+// once the broker has confirmed it, so the original can be acknowledged without the IDs that
+// were handled coming back. It returns false when the whole message should be requeued.
+func (c *Consumer) splitFailed(ctx context.Context, ch domain.Channel, ids []int64, err error) bool {
+	var be *ports.BatchError
+	if c.republish == nil || !errors.As(err, &be) || len(be.Failed) == 0 || len(be.Failed) >= len(ids) {
+		return false
+	}
+	c.log.Warn("handler failed for part of a message, republishing those ids",
+		"channel", ch, "failed", len(be.Failed), "ids", len(ids), "error", be.Err)
+	// The failed ids wait out the same delay as a requeued message, so a persistent failure is not
+	// a hot loop. The handler's own context may have expired, so the republish gets a fresh one.
+	select {
+	case <-ctx.Done():
+	case <-time.After(requeueDelay):
+	}
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handlerTimeout)
+	defer cancel()
+	ok, perr := c.republish.Publish(pctx, ch, be.Failed)
+	if perr != nil {
+		c.log.Warn("republish failed ids", "channel", ch, "error", perr)
+		return false
+	}
+	return !slices.Contains(ok, false)
+}
+
+// recordWait reports the time since the publisher sent msg, once for each of its n IDs. A redelivered message is skipped:
 // its wait includes the failure that sent it back, which is not queueing.
-func (c *Consumer) recordWait(ch domain.Channel, msg amqp.Delivery) {
+func (c *Consumer) recordWait(ch domain.Channel, msg amqp.Delivery, n int) {
 	if msg.Redelivered {
 		return
 	}
@@ -132,5 +173,8 @@ func (c *Consumer) recordWait(ch domain.Channel, msg amqp.Delivery) {
 	if !ok {
 		return
 	}
-	c.rec.QueueWait(ch, time.Since(time.Unix(0, ns)))
+	d := time.Since(time.Unix(0, ns))
+	for range n {
+		c.rec.QueueWait(ch, d)
+	}
 }

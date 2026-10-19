@@ -3,6 +3,8 @@ package memory
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -15,19 +17,25 @@ var (
 	_ ports.Consumer  = (*Queue)(nil)
 )
 
-// Queue holds delivery IDs per channel. A handler error puts the message back.
+// Queue holds messages of delivery IDs per channel. A handler error puts the message back.
 type Queue struct {
 	mu   sync.Mutex
-	msgs map[domain.Channel][]int64
+	size int
+	msgs map[domain.Channel][][]int64
 }
 
-func New() *Queue { return &Queue{msgs: map[domain.Channel][]int64{}} }
+// New returns a queue whose messages hold at most size IDs.
+func New(size int) *Queue {
+	return &Queue{size: max(size, 1), msgs: map[domain.Channel][][]int64{}}
+}
 
 // Publish implements ports.Publisher and confirms everything.
 func (q *Queue) Publish(_ context.Context, ch domain.Channel, ids []int64) ([]bool, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.msgs[ch] = append(q.msgs[ch], ids...)
+	for first := 0; first < len(ids); first += q.size {
+		q.msgs[ch] = append(q.msgs[ch], slices.Clone(ids[first:min(first+q.size, len(ids))]))
+	}
 	confirmed := make([]bool, len(ids))
 	for i := range confirmed {
 		confirmed[i] = true
@@ -42,21 +50,21 @@ func (q *Queue) Len(ch domain.Channel) int {
 	return len(q.msgs[ch])
 }
 
-func (q *Queue) pop(ch domain.Channel) (int64, bool) {
+func (q *Queue) pop(ch domain.Channel) ([]int64, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if len(q.msgs[ch]) == 0 {
-		return 0, false
+		return nil, false
 	}
-	id := q.msgs[ch][0]
+	m := q.msgs[ch][0]
 	q.msgs[ch] = q.msgs[ch][1:]
-	return id, true
+	return m, true
 }
 
 // Consume implements ports.Consumer.
 func (q *Queue) Consume(ctx context.Context, ch domain.Channel, h ports.Handler) error {
 	for ctx.Err() == nil {
-		id, ok := q.pop(ch)
+		m, ok := q.pop(ch)
 		if !ok {
 			select {
 			case <-ctx.Done():
@@ -64,9 +72,13 @@ func (q *Queue) Consume(ctx context.Context, ch domain.Channel, h ports.Handler)
 			}
 			continue
 		}
-		if err := h(ctx, id); err != nil {
+		if err := h(ctx, m); err != nil {
+			// Like the broker consumer, only the ids a handler reports as failed come back.
+			if be := new(ports.BatchError); errors.As(err, &be) && len(be.Failed) > 0 {
+				m = be.Failed
+			}
 			q.mu.Lock()
-			q.msgs[ch] = append(q.msgs[ch], id)
+			q.msgs[ch] = append(q.msgs[ch], m)
 			q.mu.Unlock()
 		}
 	}

@@ -204,7 +204,7 @@ func newStack(t *testing.T, tune ...func(*config.Config)) *stack {
 	broker := rmqtest.Start(t)
 	mq := rabbitmq.New(broker.URL)
 	start(t, mq)
-	pub := rabbitmq.NewPublisher(mq, 5*time.Second)
+	pub := rabbitmq.NewPublisher(mq, 5*time.Second, 1)
 	t.Cleanup(pub.Stop)
 	backoff := domain.Backoff{Initial: 20 * time.Millisecond, Max: 100 * time.Millisecond, Multiplier: 2}
 	start(t, relay.New(postgres.NewOutboxStore(db), func() ports.Publisher { return pub },
