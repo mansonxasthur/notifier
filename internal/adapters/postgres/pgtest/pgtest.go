@@ -19,7 +19,7 @@ import (
 
 // NewDB starts a Postgres container and returns its connection string. It skips the test
 // under -short and removes the container when the test ends.
-func NewDB(t *testing.T) string {
+func NewDB(t testing.TB) string {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("integration test")
@@ -45,7 +45,7 @@ func NewDB(t *testing.T) string {
 }
 
 // Migrator returns a migrator for the database at url, reading the repository's migrations.
-func Migrator(t *testing.T, url string) *migrate.Migrate {
+func Migrator(t testing.TB, url string) *migrate.Migrate {
 	t.Helper()
 	dir := filepath.Join(repoRoot(t), "migrations")
 	m, err := migrate.New("file://"+filepath.ToSlash(dir), strings.Replace(url, "postgres://", "pgx5://", 1))
@@ -57,7 +57,7 @@ func Migrator(t *testing.T, url string) *migrate.Migrate {
 }
 
 // repoRoot walks up from the test's working directory (its package directory) to go.mod.
-func repoRoot(t *testing.T) string {
+func repoRoot(t testing.TB) string {
 	t.Helper()
 	dir, err := os.Getwd()
 	if err != nil {
@@ -76,7 +76,7 @@ func repoRoot(t *testing.T) string {
 }
 
 // Up applies every pending migration.
-func Up(t *testing.T, m *migrate.Migrate) {
+func Up(t testing.TB, m *migrate.Migrate) {
 	t.Helper()
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		t.Fatalf("up: %v", err)
@@ -84,7 +84,7 @@ func Up(t *testing.T, m *migrate.Migrate) {
 }
 
 // NewMigratedDB starts a Postgres container, applies the migrations, and returns its connection string.
-func NewMigratedDB(t *testing.T) string {
+func NewMigratedDB(t testing.TB) string {
 	t.Helper()
 	url := NewDB(t)
 	Up(t, Migrator(t, url))

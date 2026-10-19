@@ -1,4 +1,4 @@
-.PHONY: check test vet lint fmt-check hooks up down logs migrate-create
+.PHONY: check test bench vet lint fmt-check hooks up down logs migrate-create
 
 .DEFAULT_GOAL := check
 
@@ -8,6 +8,11 @@ check: fmt-check vet lint test
 # The postgres tests use testcontainers, so Docker must be running.
 test:
 	go test -race ./...
+
+# Function speed on this machine, not capacity. Needs Docker. Save the output with the machine
+# it ran on under docs/results/ (see docs/results/README.md).
+bench:
+	go test -run '^$$' -bench . -benchmem -benchtime 1s ./...
 
 vet:
 	go vet ./...

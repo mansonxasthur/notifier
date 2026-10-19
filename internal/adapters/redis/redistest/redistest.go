@@ -13,7 +13,7 @@ import (
 
 // Start runs a Redis server and returns its URL. It skips the test under -short and removes
 // the container when the test ends.
-func Start(t *testing.T) string {
+func Start(t testing.TB) string {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("integration test")
