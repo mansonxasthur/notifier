@@ -38,7 +38,10 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	intake := sender.NewIntake(inbox, cfg.PrimaryProviders(), cfg.Sender.ClaimLimits(), attempt.Send, log).
 		WithBatching(cfg.Sender.BatchSize, cfg.Sender.Linger)
 	scan := sender.NewScan(inbox, attempt.Send, cfg.Sender.PollInterval, cfg.Sender.ScanBatch, cfg.Sender.ClaimLimits(), log)
-	s := sender.New(rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, log).WithRecorder(metrics), intake, scan, attempt)
+	// Ids a handler could not finish go back to the queue in a message of their own.
+	republisher := rabbitmq.NewPublisher(mq, cfg.Relay.ConfirmTimeout, cfg.Relay.MessageSize)
+	consumer := rabbitmq.NewConsumer(mq, cfg.Sender.Prefetch, log).WithRecorder(metrics).WithRepublisher(republisher)
+	s := sender.New(consumer, intake, scan, attempt, closeFunc(republisher.Stop))
 
 	// Every configured provider is exported from the start, closed until its breaker says otherwise.
 	metrics.BreakerStates(func() map[string]int {
@@ -58,3 +61,8 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 
 	return []lifecycle.Component{db, mq, s, srv}, nil
 }
+
+// closeFunc makes a stop function a sender.Closer.
+type closeFunc func()
+
+func (f closeFunc) Close() { f() }

@@ -200,6 +200,7 @@ func TestValidateRejects(t *testing.T) {
 		{"backoff max below initial", func(c *Config) { c.Relay.Backoff.Max = c.Relay.Backoff.Initial / 2 }, "relay.backoff.max"},
 		{"backoff multiplier below one", func(c *Config) { c.Relay.Backoff.Multiplier = 0.5 }, "multiplier"},
 		{"relay poll zero", func(c *Config) { c.Relay.PollInterval = 0 }, "relay.poll_interval"},
+		{"relay message size zero", func(c *Config) { c.Relay.MessageSize = 0 }, "relay.message_size"},
 		{"relay batch zero", func(c *Config) { c.Relay.BatchSize = 0 }, "relay.batch_size"},
 		{"relay workers zero", func(c *Config) { c.Relay.Workers = 0 }, "relay.workers"},
 		{"relay attempts zero", func(c *Config) { c.Relay.MaxAttempts = 0 }, "relay.max_attempts"},

@@ -43,7 +43,9 @@ func build(cfg *config.Config, log *slog.Logger) ([]lifecycle.Component, error) 
 	}
 
 	outbox := postgres.NewOutboxStore(db)
-	newPublisher := func() ports.Publisher { return rabbitmq.NewPublisher(mq, cfg.Relay.ConfirmTimeout) }
+	newPublisher := func() ports.Publisher {
+		return rabbitmq.NewPublisher(mq, cfg.Relay.ConfirmTimeout, cfg.Relay.MessageSize)
+	}
 	r := relay.New(outbox, newPublisher, relay.Config{
 		PollInterval: cfg.Relay.PollInterval,
 		BatchSize:    cfg.Relay.BatchSize,

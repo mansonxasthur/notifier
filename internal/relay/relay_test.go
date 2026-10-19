@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -114,10 +115,63 @@ func (p *failingPublisher) Publish(ctx context.Context, ch domain.Channel, ids [
 	return p.Publisher.Publish(ctx, ch, ids)
 }
 
+// nackFirstMessage reports the first message-sized chunk of its first call as unconfirmed, as
+// a publisher does when the broker nacks that one message, and remembers which ids it was.
+type nackFirstMessage struct {
+	ports.Publisher
+	size int
+
+	mu     sync.Mutex
+	called bool
+	nacked []int64
+}
+
+func (p *nackFirstMessage) Publish(ctx context.Context, ch domain.Channel, ids []int64) ([]bool, error) {
+	ok, err := p.Publisher.Publish(ctx, ch, ids)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.called {
+		return ok, err
+	}
+	p.called = true
+	n := min(p.size, len(ids))
+	for i := range n {
+		ok[i] = false
+	}
+	p.nacked = slices.Clone(ids[:n])
+	return ok, errors.New("broker nacked a message")
+}
+
+// A nacked message releases exactly its own rows; the rest of the batch is marked published.
+func TestNackedMessageReleasesOnlyItsRows(t *testing.T) {
+	db := startDB(t)
+	seed(t, db, 50)
+	pub := &nackFirstMessage{Publisher: memory.New(10), size: 10}
+	cfg := relayConfig()
+	cfg.BatchSize = 50
+	cfg.Workers = 1
+	start(t, relay.New(postgres.NewOutboxStore(db), shared(pub), cfg, quiet))
+
+	waitFor(t, "every row published", func() bool {
+		return count(t, db.Pool(), `SELECT count(*) FROM outbox WHERE state = 'PUBLISHED'`) == 50
+	})
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	if len(pub.nacked) != 10 {
+		t.Fatalf("nacked %d ids, want 10", len(pub.nacked))
+	}
+	if got := count(t, db.Pool(), `SELECT count(*) FROM outbox WHERE retries = 2`); got != 10 {
+		t.Errorf("rows claimed twice = %d, want only the 10 of the nacked message", got)
+	}
+	if got := count(t, db.Pool(), `SELECT count(*) FROM outbox WHERE retries = 2 AND delivery_id = ANY($1)`, pub.nacked); got != 10 {
+		t.Errorf("claimed-twice rows among the nacked ids = %d, want 10", got)
+	}
+}
+
 func TestRelayPublishes(t *testing.T) {
 	db := startDB(t)
 	seed(t, db, 50)
-	queue := memory.New()
+	queue := memory.New(1)
 	start(t, relay.New(postgres.NewOutboxStore(db), shared(queue), relayConfig(), quiet))
 
 	waitFor(t, "every outbox row published", func() bool {
@@ -131,7 +185,7 @@ func TestRelayPublishes(t *testing.T) {
 func TestRelayReleasesUnconfirmedAndRetries(t *testing.T) {
 	db := startDB(t)
 	seed(t, db, 5)
-	pub := &failingPublisher{Publisher: memory.New()}
+	pub := &failingPublisher{Publisher: memory.New(1)}
 	pub.failing.Store(true)
 	start(t, relay.New(postgres.NewOutboxStore(db), shared(pub), relayConfig(), quiet))
 
@@ -147,7 +201,7 @@ func TestRelayReleasesUnconfirmedAndRetries(t *testing.T) {
 func TestRelayGivesUpAfterMaxAttempts(t *testing.T) {
 	db := startDB(t)
 	seed(t, db, 2)
-	pub := &failingPublisher{Publisher: memory.New()}
+	pub := &failingPublisher{Publisher: memory.New(1)}
 	pub.failing.Store(true)
 	cfg := relayConfig()
 	cfg.MaxAttempts = 2
@@ -175,7 +229,7 @@ func TestKilledRelayIsRecovered(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	queue := memory.New()
+	queue := memory.New(1)
 	janitor := relay.NewJanitor(outbox, postgres.NewInboxStore(db), fakeChecker{}, relay.JanitorConfig{
 		Interval: 20 * time.Millisecond, OutboxStuckAfter: 30 * time.Millisecond,
 		InboxStuckMargin: time.Second, Backoff: backoff,
@@ -377,7 +431,7 @@ func TestRedeliveredMessageIsHandledOnce(t *testing.T) {
 	if err := db.Pool().QueryRow(context.Background(), `SELECT id FROM deliveries`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	pub := rabbitmq.NewPublisher(mq, 5*time.Second)
+	pub := rabbitmq.NewPublisher(mq, 5*time.Second, 1)
 	t.Cleanup(pub.Stop)
 	for range 3 {
 		if _, err := pub.Publish(context.Background(), domain.ChannelSMS, []int64{id}); err != nil {
@@ -405,7 +459,7 @@ func TestBrokerRestartLosesNothing(t *testing.T) {
 	// The outage must fit inside the attempt cap, or the rows would end DEAD by design.
 	cfg := relayConfig()
 	cfg.MaxAttempts = 1000
-	start(t, relay.New(postgres.NewOutboxStore(db), func() ports.Publisher { return rabbitmq.NewPublisher(mq, 2*time.Second) }, cfg, quiet))
+	start(t, relay.New(postgres.NewOutboxStore(db), func() ports.Publisher { return rabbitmq.NewPublisher(mq, 2*time.Second, 7) }, cfg, quiet))
 
 	seed(t, db, wave)
 	broker.Restart(t)
