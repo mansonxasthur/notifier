@@ -122,7 +122,7 @@ func (j *Janitor) recover(ctx context.Context, p Provider, s domain.StuckInbox) 
 		// a retry, so a provider that keeps losing messages is eventually left behind.
 		action = "requeued"
 		next := time.Now().Add(p.Backoff.Delay(s.Retries+1, jitter()))
-		ok, err = j.inbox.Requeue(ctx, s, next)
+		ok, err = j.inbox.Requeue(ctx, s, domain.FailureTimeout, next)
 	case res == ports.CheckNotFound && p.Next == "":
 		// Out of retries on the last provider, and it says it never had the message.
 		action = "failed"

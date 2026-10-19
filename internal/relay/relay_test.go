@@ -301,6 +301,9 @@ func TestJanitorRecoversStuckInbox(t *testing.T) {
 	if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE delivery_id = ANY($1) AND state = 'DEAD' AND failure_reason = 'EXPIRED' AND failure_class IS NULL`, []int64{ids[7], ids[10]}); got != 2 {
 		t.Errorf("EXPIRED rows without a failure class = %d, want 2: the sender stores none either", got)
 	}
+	if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE delivery_id = $1 AND failure_class = 'timeout'`, ids[1]); got != 1 {
+		t.Error("a requeued row must record the failure class, as the sender's retries do")
+	}
 	// The requeued row spent a retry, so the provider cannot keep it forever.
 	if got := count(t, db.Pool(), `SELECT count(*) FROM inbox WHERE delivery_id = $1 AND provider = 'sms-a' AND retries = 1`, ids[1]); got != 1 {
 		t.Error("a requeue must spend a retry")
