@@ -104,7 +104,7 @@ func (a *Attempt) Send(ctx context.Context, c Claimed) error {
 	defer cancel()
 
 	if !d.ExpiresAt.IsZero() && !a.now().Before(d.ExpiresAt) {
-		return a.fail(settleCtx, run, "", domain.ReasonExpired)
+		return a.fail(settleCtx, run, domain.FailureNone, domain.ReasonExpired)
 	}
 	ticket, allowed := a.breakers.Allow(c.Provider)
 	run.ticket = ticket
@@ -193,12 +193,11 @@ func (a *Attempt) settle(ctx context.Context, run attemptRun, sendErr error) err
 		return a.fail(settleCtx, run, class, domain.ReasonProviderRejected, "error", sendErr)
 	}
 
-	if a.breakers.Failure(provider, run.ticket) == Opened {
-		a.log.Warn("circuit breaker opened", "provider", provider)
-	}
 	if class == domain.FailureTimeout {
+		// The breaker is told after the lookup: a timeout the provider then says it took is not a failure.
 		return a.settleTimeout(ctx, settleCtx, run, sendErr)
 	}
+	a.breakerFailure(run)
 	return a.retryOrMove(settleCtx, run, class, sendErr)
 }
 
@@ -208,21 +207,36 @@ func (a *Attempt) settle(ctx context.Context, run attemptRun, sendErr error) err
 func (a *Attempt) settleTimeout(checkCtx, settleCtx context.Context, run attemptRun, sendErr error) error {
 	res, err := a.checker.Check(checkCtx, run.c.Provider, run.c.DeliveryID)
 	if err != nil && checkCtx.Err() != nil {
+		// Shutdown says nothing about the provider; the janitor makes the same check.
+		a.breakers.Release(run.c.Provider, run.ticket)
 		return checkCtx.Err()
 	}
-	switch {
-	case err == nil && res == ports.CheckAccepted:
+	if err == nil && res == ports.CheckAccepted {
+		// Slow, but the provider took the message: neither a success nor a failure.
+		a.breakers.Release(run.c.Provider, run.ticket)
 		return a.complete(settleCtx, run.c, domain.FailureTimeout, "lookup", "accepted")
-	case err == nil && res == ports.CheckNotFound:
+	}
+	a.breakerFailure(run)
+	if err == nil && res == ports.CheckNotFound {
 		// The provider never got it, so another try on the same provider is safe.
 		return a.retryOrMove(settleCtx, run, domain.FailureTimeout, sendErr)
 	}
 	// No usable answer: the message may or may not be there. Another provider could
 	// duplicate it, which is accepted; the last provider can only leave it unresolved.
 	if run.next == "" {
+		if err == nil {
+			err = fmt.Errorf("the lookup gave no usable answer (%v)", res)
+		}
 		return a.unresolve(settleCtx, run, "lookup_error", err)
 	}
 	return a.switchTo(settleCtx, run, domain.FailureTimeout, "lookup_unusable")
+}
+
+// breakerFailure tells the breaker the call failed on the provider's side.
+func (a *Attempt) breakerFailure(run attemptRun) {
+	if a.breakers.Failure(run.c.Provider, run.ticket) == Opened {
+		a.log.Warn("circuit breaker opened", "provider", run.c.Provider)
+	}
 }
 
 // retryOrMove handles a failure the provider is known not to have taken: retry it while it

@@ -32,7 +32,7 @@ type InboxStore interface {
 	// early webhook) keeps its state.
 	Complete(ctx context.Context, deliveryID int64, claimCount int) (bool, error)
 	// Fail ends a row this sender holds DEAD and its delivery FAILED with the reason, for a
-	// failure that no retry can fix. False means the claim is stale.
+	// failure that no retry can fix. An empty class is stored as NULL. False means the claim is stale.
 	Fail(ctx context.Context, deliveryID int64, claimCount int, class domain.FailureClass, reason domain.FailureReason) (bool, error)
 	// Park moves a row this sender holds to WAITING_RETRY after a failed attempt: it records
 	// the failure class, adds one to retries, and sets next as the due time. False means the claim is stale.

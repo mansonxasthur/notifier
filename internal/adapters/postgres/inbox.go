@@ -234,7 +234,7 @@ func scanApplied(err error, applied bool, what string) (bool, error) {
 
 const failInbox = `
 WITH dead AS (
-  UPDATE inbox SET state = $3, failure_class = $5, failure_reason = $6, last_try = now()
+  UPDATE inbox SET state = $3, failure_class = NULLIF($5::text, ''), failure_reason = $6, last_try = now()
   WHERE delivery_id = $1 AND state = $4 AND claim_count = $2
   RETURNING delivery_id
 ), failed AS (

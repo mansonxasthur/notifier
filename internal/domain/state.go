@@ -84,6 +84,8 @@ const (
 	FailureMessage  FailureClass = "message"
 	FailureProvider FailureClass = "provider"
 	FailureTimeout  FailureClass = "timeout"
+	// FailureNone is no class, for an end that was not a failed attempt, such as EXPIRED. It is stored as NULL.
+	FailureNone FailureClass = ""
 )
 
 // FailureReason is the stored reason a row or delivery ended in a terminal failure.

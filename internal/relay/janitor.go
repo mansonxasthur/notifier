@@ -113,7 +113,7 @@ func (j *Janitor) recover(ctx context.Context, p Provider, s domain.StuckInbox) 
 		ok, err = j.inbox.Accept(ctx, s)
 	case expired && res == ports.CheckNotFound:
 		action = "expired"
-		ok, err = j.inbox.Fail(ctx, s.DeliveryID, s.ClaimCount, domain.FailureTimeout, domain.ReasonExpired)
+		ok, err = j.inbox.Fail(ctx, s.DeliveryID, s.ClaimCount, domain.FailureNone, domain.ReasonExpired)
 	case expired:
 		action = "unresolved"
 		ok, err = j.inbox.Unresolve(ctx, s.DeliveryID, s.ClaimCount, domain.FailureTimeout)
