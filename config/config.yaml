@@ -48,6 +48,9 @@ simulation_url: http://simprovider:8081
 # succeed, fail_permanent, fail_transient, slow, timeout, late_failure.
 simprovider:
   mode: random
+  # providers gives one provider a mode of its own in place of mode, for fault runs that fail a
+  # primary while its fallback stays healthy (see loadtest/configs/). Empty by default.
+  providers: {}
   seed: 0
   weights: {succeed: 70, fail_permanent: 5, fail_transient: 10, slow: 5, timeout: 5, late_failure: 5}
   # Keep slow_delay under the providers' timeout and timeout_delay over it.

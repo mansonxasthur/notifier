@@ -1,0 +1,12 @@
+ secs_from_injection |   state    |    failure_reason     | count 
+---------------------+------------+-----------------------+-------
+                   0 | FAILED     | NO_PROVIDER_AVAILABLE |   783
+                   0 | UNRESOLVED |                       |   117
+                   5 | FAILED     | NO_PROVIDER_AVAILABLE |  1125
+                  10 | FAILED     | NO_PROVIDER_AVAILABLE |  1125
+                  15 | FAILED     | NO_PROVIDER_AVAILABLE |  1125
+                  20 | FAILED     | NO_PROVIDER_AVAILABLE |  1125
+                  25 | FAILED     | NO_PROVIDER_AVAILABLE |  1125
+                  30 | FAILED     | NO_PROVIDER_AVAILABLE |   647
+(8 rows)
+

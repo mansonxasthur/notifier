@@ -144,6 +144,9 @@ type SimProvider struct {
 	// Mode is "random", which draws a scenario per request from Weights, or the name of one
 	// scenario applied to every request.
 	Mode string `yaml:"mode"`
+	// Providers gives a provider its own mode in place of Mode: a scenario name or "random".
+	// It lets a run fail one provider while its fallback stays healthy.
+	Providers map[string]string `yaml:"providers"`
 	// Seed makes random mode reproducible; zero seeds from the clock.
 	Seed    int64                   `yaml:"seed"`
 	Weights map[domain.Scenario]int `yaml:"weights"`
@@ -361,6 +364,12 @@ func (c *Config) Validate() error {
 
 	if c.Simulation {
 		errs = append(errs, c.SimProvider.validate(c.providerTimeouts())...)
+		known := c.ProvidersByName()
+		for name := range c.SimProvider.Providers {
+			if _, ok := known[name]; !ok {
+				bad("simprovider.providers.%s is not a configured provider", name)
+			}
+		}
 	}
 	names := map[string]bool{}
 	for _, ch := range domain.Channels() {
@@ -506,6 +515,11 @@ func (s SimProvider) validate(shortestTimeout, longestTimeout time.Duration) []e
 	if s.Mode != RandomMode && !domain.Scenario(s.Mode).Valid() {
 		bad("simprovider.mode %q must be %q or a scenario name", s.Mode, RandomMode)
 	}
+	for name, mode := range s.Providers {
+		if mode != RandomMode && !domain.Scenario(mode).Valid() {
+			bad("simprovider.providers.%s %q must be %q or a scenario name", name, mode, RandomMode)
+		}
+	}
 	total := 0
 	for sc, w := range s.Weights {
 		if !sc.Valid() {
@@ -516,8 +530,12 @@ func (s SimProvider) validate(shortestTimeout, longestTimeout time.Duration) []e
 		}
 		total += w
 	}
-	if s.Mode == RandomMode && total <= 0 {
-		bad("simprovider.weights needs a positive weight when mode is %q", RandomMode)
+	randomUsed := s.Mode == RandomMode
+	for _, mode := range s.Providers {
+		randomUsed = randomUsed || mode == RandomMode
+	}
+	if randomUsed && total <= 0 {
+		bad("simprovider.weights needs a positive weight when a mode is %q", RandomMode)
 	}
 	if s.SlowDelay <= 0 {
 		bad("simprovider.slow_delay must be positive")

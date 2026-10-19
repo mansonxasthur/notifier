@@ -1,0 +1,5 @@
+     25 sender-1  | {"level":"ERROR","msg":"send failed","service":"sender","provider":"sms-a","error":"settle inbox batch: FATAL: terminating connection due to administrator command (SQLSTATE 57P01)"}
+      2 sender-1  | {"level":"ERROR","msg":"retry scan failed","service":"sender","channel":"sms","error":"claim due inbox: FATAL: terminating connection due to administrator command (SQLSTATE 57P01)"}
+      2 sender-1  | {"level":"ERROR","msg":"retry scan failed","service":"sender","channel":"email","error":"claim due inbox: FATAL: terminating connection due to administrator command (SQLSTATE 57P01)"}
+      1 sender-1  | {"level":"ERROR","msg":"retry scan failed","service":"sender","channel":"whatsapp","error":"claim due inbox: failed to connect to `user=notifier database=notifier`: 172.28.0.5:5432 (postgres): dial error: dial tcp 172.28.0.5:5432: connect: connection refused"}
+      1 sender-1  | {"level":"ERROR","msg":"retry scan failed","service":"sender","channel":"whatsapp","error":"claim due inbox: FATAL: terminating connection due to administrator command (SQLSTATE 57P01)"}

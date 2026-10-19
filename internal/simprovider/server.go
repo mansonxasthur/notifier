@@ -69,7 +69,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	e, first := s.ledger.Record(name, p.DeliveryID, s.chooser.Pick, s.now())
+	e, first := s.ledger.Record(name, p.DeliveryID, func() domain.Scenario { return s.chooser.PickFor(name) }, s.now())
 	s.log.Info("send received", "delivery_id", p.DeliveryID, "provider", name,
 		"scenario", e.Scenario, "first", first, "sends", e.Sends)
 

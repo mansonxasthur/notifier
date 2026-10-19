@@ -1,0 +1,6 @@
+      4 sender-1  | {"level":"WARN","msg":"consumer stopped, reconnecting","service":"sender","channel":"whatsapp","error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      4 sender-1  | {"level":"WARN","msg":"consumer stopped, reconnecting","service":"sender","channel":"sms","error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      4 sender-1  | {"level":"WARN","msg":"consumer stopped, reconnecting","service":"sender","channel":"email","error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      1 sender-1  | {"level":"WARN","msg":"consumer stopped, reconnecting","service":"sender","channel":"whatsapp","error":"Exception (504) Reason: \"channel/connection is not open\""}
+      1 sender-1  | {"level":"WARN","msg":"consumer stopped, reconnecting","service":"sender","channel":"sms","error":"Exception (504) Reason: \"channel/connection is not open\""}
+      1 sender-1  | {"level":"WARN","msg":"consumer stopped, reconnecting","service":"sender","channel":"email","error":"Exception (504) Reason: \"channel/connection is not open\""}

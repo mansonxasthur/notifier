@@ -1,0 +1,11 @@
+ secs_from_injection | state  | failure_reason | count 
+---------------------+--------+----------------+-------
+                   0 | FAILED | BOUNCED        |   900
+                   5 | FAILED | BOUNCED        |  1125
+                  10 | FAILED | BOUNCED        |  1125
+                  15 | FAILED | BOUNCED        |  1125
+                  20 | FAILED | BOUNCED        |  1125
+                  25 | FAILED | BOUNCED        |  1125
+                  30 | FAILED | BOUNCED        |   225
+(7 rows)
+

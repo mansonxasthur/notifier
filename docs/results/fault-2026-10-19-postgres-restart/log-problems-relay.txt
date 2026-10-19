@@ -1,0 +1,5 @@
+     25 relay-1  | {"level":"WARN","msg":"recovered stuck inbox row","service":"relay","provider":"sms-a","action":"accepted"}
+     15 relay-1  | {"level":"ERROR","msg":"claim outbox","service":"relay","error":"claim outbox: failed to connect to `user=notifier database=notifier`: 172.28.0.5:5432 (postgres): dial error: dial tcp 172.28.0.5:5432: connect: connection refused"}
+     12 relay-1  | {"level":"ERROR","msg":"claim outbox","service":"relay","error":"claim outbox: failed to connect to `user=notifier database=notifier`: 172.28.0.5:5432 (postgres): server error: FATAL: the database system is shutting down (SQLSTATE 57P03)"}
+      6 relay-1  | {"level":"ERROR","msg":"claim outbox","service":"relay","error":"claim outbox: failed to connect to `user=notifier database=notifier`: hostname resolving error: lookup postgres on 127.0.0.11:53: no such host"}
+      5 relay-1  | {"level":"ERROR","msg":"claim outbox","service":"relay","error":"claim outbox: FATAL: terminating connection due to administrator command (SQLSTATE 57P01)"}

@@ -422,6 +422,20 @@ func TestChooser(t *testing.T) {
 		}
 	})
 
+	t.Run("a provider's own mode wins over the global one", func(t *testing.T) {
+		c := simprovider.NewChooser(config.SimProvider{
+			Mode: string(domain.ScenarioSucceed), Providers: map[string]string{"sms-a": string(domain.ScenarioFailTransient)},
+		})
+		for range 5 {
+			if got := c.PickFor("sms-a"); got != domain.ScenarioFailTransient {
+				t.Fatalf("sms-a pick = %s, want fail_transient", got)
+			}
+			if got := c.PickFor("sms-b"); got != domain.ScenarioSucceed {
+				t.Fatalf("sms-b pick = %s, want the global succeed", got)
+			}
+		}
+	})
+
 	cfg := config.SimProvider{Mode: config.RandomMode, Seed: 42, Weights: map[domain.Scenario]int{
 		domain.ScenarioSucceed: 70, domain.ScenarioTimeout: 30, domain.ScenarioSlow: 0,
 	}}

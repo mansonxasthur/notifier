@@ -15,6 +15,7 @@ import (
 // Chooser picks the scenario for a new delivery.
 type Chooser struct {
 	mode    string
+	modes   map[string]string
 	weights map[domain.Scenario]int
 	total   int
 
@@ -29,17 +30,30 @@ func NewChooser(c config.SimProvider) *Chooser {
 	if seed == 0 {
 		seed = uint64(time.Now().UnixNano()) //nolint:gosec // a seed, not a size
 	}
-	ch := &Chooser{mode: c.Mode, weights: c.Weights, rng: rand.New(rand.NewPCG(seed, seed))} //nolint:gosec // the simulator needs no secure randomness
+	ch := &Chooser{mode: c.Mode, modes: c.Providers, weights: c.Weights, rng: rand.New(rand.NewPCG(seed, seed))} //nolint:gosec // the simulator needs no secure randomness
 	for _, w := range c.Weights {
 		ch.total += max(w, 0)
 	}
 	return ch
 }
 
-// Pick returns the scenario for the next new delivery.
-func (c *Chooser) Pick() domain.Scenario {
-	if c.mode != config.RandomMode {
-		return domain.Scenario(c.mode)
+// Pick returns the scenario for the next new delivery, in the global mode.
+func (c *Chooser) Pick() domain.Scenario { return c.pick(c.mode) }
+
+// PickFor is Pick for a delivery sent to provider, which may have a mode of its own.
+func (c *Chooser) PickFor(provider string) domain.Scenario {
+	if mode, ok := c.modes[provider]; ok {
+		return c.pick(mode)
+	}
+	return c.pick(c.mode)
+}
+
+func (c *Chooser) pick(mode string) domain.Scenario {
+	if mode != config.RandomMode {
+		return domain.Scenario(mode)
+	}
+	if c.total <= 0 {
+		return domain.ScenarioSucceed // no weights: config validation refuses this; do not panic without it
 	}
 	c.mu.Lock()
 	n := c.rng.IntN(c.total)

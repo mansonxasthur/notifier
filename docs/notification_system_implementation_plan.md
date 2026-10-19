@@ -146,7 +146,7 @@ Goal: evidence a reviewer can read without running anything. The brief asks for 
 - [x] End-to-end tests through the API with the simulated provider in each failure mode, including Arabic (UTF-8) content from the request to the provider
 - [x] Go benchmarks for hot paths such as batch validation and insert
 - [x] Load test of the full stack (k6, vegeta, or a small Go driver) with p99 latency from request to ACCEPTED against the 5 second target, reported separately for first-attempt and retried deliveries, and with queue wait time measured
-- [ ] Fault-injection runs: provider down, slow, timing out, late failure webhook, Redis unavailable, broker restarted, relay or sender killed
+- [x] Fault-injection runs: provider down, slow, timing out, late failure webhook, Redis unavailable, broker restarted, relay or sender killed, Postgres restarted (`docs/results/README.md`, "Fault injection")
 - [x] Metrics for queue wait, queue depth, end-to-end latency, and breaker state, captured during the runs
 
 Done when every failure mode and the load test have recorded results with the exact setup, hardware, and parameters.

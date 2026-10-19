@@ -1,0 +1,20 @@
+     19 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"sms","batch":1,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+     16 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"email","batch":1,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+     14 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"whatsapp","batch":1,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+     14 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"email","batch":2,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+     13 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"whatsapp","batch":2,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      8 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"email","batch":3,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      6 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"sms","batch":3,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      5 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"whatsapp","batch":4,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      5 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"sms","batch":2,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      5 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"email","batch":4,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      4 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"sms","batch":6,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      4 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"sms","batch":4,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      3 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"whatsapp","batch":75,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      2 relay-1  | {"level":"WARN","msg":"read queue depth","service":"relay","channel":"whatsapp","error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      2 relay-1  | {"level":"WARN","msg":"read queue depth","service":"relay","channel":"sms","error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      2 relay-1  | {"level":"WARN","msg":"read queue depth","service":"relay","channel":"email","error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      2 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"whatsapp","batch":8,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      2 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"whatsapp","batch":6,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      2 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"whatsapp","batch":3,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
+      2 relay-1  | {"level":"WARN","msg":"publish incomplete","service":"relay","channel":"whatsapp","batch":14,"error":"dial: dial tcp 172.24.0.5:5672: connect: connection refused"}
